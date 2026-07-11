@@ -7,9 +7,7 @@ setup(
     packages=find_packages(include=["kwr57_sensor", "kwr57_sensor.*"]),
     python_requires=">=3.8",
     install_requires=[
-        "python-can>=4.0",
-        "canalystii>=0.1",
-        "libusb-package>=1.0.24",
+        "can-sdk>=0.1.0",
     ],
     entry_points={
         "console_scripts": [

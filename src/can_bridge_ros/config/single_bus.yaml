@@ -2,9 +2,9 @@
 /**:
   ros__parameters:
     interface: canalystii
-    channel: "0"            # python-can 通道；加引号避免被当整数
+    channel: "0"
     bitrate: 1000000
-    channel_ids: [0]        # msg.channel 值
-    bus_names: ["can0"]     # 对应 ROS 总线名 -> /can0/rx 、 /can0/tx
+    channel_ids: [0]
+    bus_names: ["can0"]
     rx_queue_depth: 1000
     receive_own_messages: false

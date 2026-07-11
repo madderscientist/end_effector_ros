@@ -1,8 +1,7 @@
 # KWR57 六轴力/力矩传感器 · CAN 通信 Python 驱动
 
 坤维科技 **KWR57 系列**（应变式六轴力/力矩传感器，CAN 通信）的纯 Python 调用库。
-通过一个 **USB 转 CAN 模块** 把 PC 与传感器相连，即可读取 `Fx/Fy/Fz/Mx/My/Mz`
-六轴数据，并下发采样率、数据流、ID 修改等指令。
+通过一个 **USB 转 CAN 模块** 把 PC 与传感器相连，即可读取 `Fx/Fy/Fz/Mx/My/Mz` 六轴数据，并下发采样率、数据流、ID 修改等指令。
 
 代码按 **协议 → 传输 → 驱动 → 应用** 四层组织，各层职责单一、可独立测试与替换。
 
@@ -62,7 +61,7 @@ graph LR
 KWR57-SDK/             纯 Python SDK（非 ROS 包）
 ├── kwr57_sensor/      模块文件夹
 │   ├── protocol.py    协议层：常量 / 指令构造 / 数据帧解码 / 三帧组装（纯逻辑，无 I/O）
-│   ├── transport.py   传输层：封装 python-can，屏蔽不同 USB-CAN 适配器差异
+│   ├── transport.py   兼容层：复用 can_sdk.CanTransport，并提供 KWR57 默认比特率
 │   ├── driver.py      驱动层：KWR57Sensor 高层 API（组合协议层 + 传输层）
 │   ├── cli.py         应用层：命令行实时读取工具
 │   └── __init__.py
@@ -75,13 +74,16 @@ KWR57-SDK/             纯 Python SDK（非 ROS 包）
 └── README.md
 ```
 
-> **ROS2 用户**：本 SDK 是纯 Python 库，可 `pip install -e .` 单独使用（非 ROS）
-> ROS2 封装在同一工作区的 **`kwr57_ros`** 包（bridge 架构）：通用 `can_bridge` 独占总线并以 `can_msgs/Frame` 收发，KWR57 只是一个**设备节点**（订阅总线帧、过滤自己的 CAN ID、发 `geometry_msgs/WrenchStamped`）。安装/运行/多设备/demo 见 [`../kwr57_ros/README.md`](../kwr57_ros/README.md) 与顶层 README
+> **ROS2 用户**：本 SDK 是带 `COLCON_IGNORE` 的纯 Python 包，不由 colcon 构建。
+> 工作区通过 `scripts/env.sh` 设置的 `PYTHONPATH` 直接导入源码，无需安装；`pip install -e .` 仅是仓库外独立使用时的可选方式。
+> ROS2 封装在同一工作区的 **`kwr57_ros`** 包：
+> 通用 `can_bridge_ros` 独占总线并以 `can_msgs/Frame` 收发，KWR57 设备节点订阅总线帧、过滤自己的 CAN ID 并发布 `geometry_msgs/WrenchStamped`。详见 [`../kwr57_ros/README.md`](../kwr57_ros/README.md) 与顶层 README。
 
 - **协议层 `protocol.py`**：只做“字节 ↔ 语义”转换，不碰硬件，可脱离设备做单元测试。
   核心是 `WrenchAssembler`——把 `0x15/0x16/0x17` 三帧缓存并集齐后组装成一个 `Wrench`。
-- **传输层 `transport.py`**：基于 [python-can](https://python-can.readthedocs.io)，
-  只暴露 `send / recv / close`。更换适配器只需改 `interface/channel`，上层不动。
+- **传输层 `transport.py`**：复用独立 [`CAN-SDK`](../CAN-SDK/README.md) 的单消费者
+  `CanTransport`，本 SDK 不再重复 CANalyst-II/libusb 初始化代码。更换适配器只需改
+  `interface/channel`，上层不动。
 - **驱动层 `driver.py`**：`KWR57Sensor` 提供 `start_stream / stop_stream /
   set_sample_rate / read_wrench / modify_id / factory_reset_id`，并支持 `with` 自动关闭。
 - **应用层 `cli.py` / `examples/`**：面向使用者的入口，演示如何调用驱动层；
@@ -90,12 +92,13 @@ KWR57-SDK/             纯 Python SDK（非 ROS 包）
 
 数据流：
 ```txt
-CAN 帧 ──recv──▶ transport ──(id,data)──▶ WrenchAssembler ──集齐3帧──▶ Wrench ──▶ 应用
-指令   ◀─send─── transport ◀──bytes────── protocol.build_*() ◀─────── 驱动方法
+CAN 帧 ──recv──▶ can_sdk/transport ──(id,data)──▶ WrenchAssembler ──集齐3帧──▶ Wrench ──▶ 应用
+指令   ◀─send─── can_sdk/transport ◀──bytes────── protocol.build_*() ◀─────── 驱动方法
 ```
 
 
 ## 4. 安装
+本库仅依赖同目录下的 `CAN-SDK`，无额外的 Python 依赖。仅在仓库外独立使用或需要命令行入口 `kwr57-read` 时安装；ROS 工作区内无需执行本节。
 
 ```sh
 cd KWR57-SDK
@@ -103,153 +106,16 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-安装后可在任意目录运行 `kwr57-read`。`-e` 表示以可编辑模式安装，修改源码后无需重新安装。
-
-`python-can` 会自动支持大多数 USB-CAN 模块。个别适配器需额外驱动/后端：
-
-| 适配器 | interface | channel 示例 | 备注 |
-|---|---|---|---|
-| CANable / CANtact (SLCAN) | `slcan` | `COM5`（Win）/`/dev/ttyACM0` | 跨平台，最常见 |
-| CANalyst-II / CAN 分析仪 | `canalystii` | `0` 或 `1` | 不显示为 COM 口；需厂商驱动 + libusb 后端 |
-| 创芯/候捷 (gs_usb) | `gs_usb` | `0` | 需安装 `libusb`/`pyusb` |
-| PEAK PCAN-USB | `pcan` | `PCAN_USBBUS1` | 需 PEAK 驱动 |
-| Kvaser | `kvaser` | `0` | 需 Kvaser 驱动 |
-| Linux SocketCAN | `socketcan` | `can0` | 先 `sudo ip link set can0 up type can bitrate 1000000` |
+`requirements.txt` 会从同一仓库的 `../CAN-SDK` 安装共享 CAN 基础包及 CANalyst-II 可选依赖。安装后可在任意目录运行 `kwr57-read`。`-e` 表示以可编辑模式安装，修改源码后无需重新安装。
 
 
-## 5. CANalyst-II 从零配置（Windows）
+## 5. CAN 适配器配置
 
-CANalyst-II 这类“CAN 分析仪”通常不是串口设备，插上后不会出现在“端口 (COM 和 LPT)”里，也不会有 `COM5` 这类端口号。本库通过 `python-can` 的 [`canalystii`](https://pypi.org/project/canalystii/) 后端访问它。厂商自带一个UI工具，其实不用安装。
+`python-can` 后端选择、CANalyst-II 的 Windows 驱动、Python 依赖、libusb、Linux udev
+权限及底层错误排查已统一迁移至 [`CAN-SDK 文档`](../CAN-SDK/README.md)。
 
-### 5.1 安装厂商驱动
-
-先安装 CANalyst-II 自带的 Windows 驱动。安装后在设备管理器里它可能显示为：
-
-- `WinUSB Device`
-- `USB-CAN`
-- `CANalyst-II`
-- 厂商自定义 USB 设备
-
-它不显示为 COM 口是正常现象。可用 PowerShell 查看当前 USB 设备：
-
-```powershell
-Get-PnpDevice -PresentOnly |
-  Where-Object { $_.InstanceId -like 'USB*' -or $_.FriendlyName -match 'CAN|WinUSB|USB-CAN|CANalyst' } |
-  Select-Object Class, FriendlyName, Status, InstanceId
-```
-
-若看到类似 `VID_04D8&PID_0053`、`WinUSB Device`、状态为 `OK` 的设备，
-通常说明 CANalyst-II 已被 Windows 识别。
-
-### 5.2 安装依赖
-
-建议用 `.venv`：
-
-```powershell
-cd KWR57-SDK
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m pip install -e .
-```
-
-CANalyst-II 需要这些 Python 依赖：
-
-```text
-python-can
-canalystii
-libusb-package
-```
-
-其中 `canalystii` 是 `python-can` 的 CANalyst-II 底层驱动包，
-`libusb-package` 用来在 Windows 上提供 `libusb-1.0.dll`。
-
-### 5.3 配置 interface / channel
-
-CANalyst-II 有两路 CAN 通道：
-
-```python
-INTERFACE = "canalystii"
-CHANNEL = "0"   # CAN1；如果接 CAN2，改为 "1"
-```
-
-运行示例：
-
-```powershell
-.\.venv\Scripts\python.exe .\examples\read_wrench.py
-```
-
-正常输出类似：
-
-```text
-Fx=  -0.470 Fy=  -0.230 Fz=  -0.085 | Mx=-0.0070 My=+0.0073 Mz=-0.0005
-Fx=  -0.500 Fy=  -0.297 Fz=  -0.088 | Mx=-0.0077 My=+0.0078 Mz=+0.0001
-```
-
-### 5.4 常见 CANalyst-II 错误
-
-| 报错 / 现象 | 处理方法 |
-|---|---|
-| `Cannot import module can.interfaces.canalystii ... No module named 'canalystii'` | 没装底层包，执行 `.\.venv\Scripts\python.exe -m pip install canalystii` |
-| `usb.core.NoBackendError: No backend available` | PyUSB 找不到 libusb 后端，执行 `.\.venv\Scripts\python.exe -m pip install libusb-package`；本库已在 `CanTransport` 中为 `canalystii` 显式加载该 DLL |
-| 设备管理器没有 COM 口 | 正常；CANalyst-II 不是 `slcan` 串口设备，不要使用 `INTERFACE="slcan"` / `CHANNEL="COM5"` |
-| 一直输出“超时：未收到完整数据帧” | 检查 CAN_H/CAN_L、传感器供电、1Mbps 比特率、120Ω 终端电阻、是否接对 CAN1/CAN2 |
-| 打开通道失败 | 如果接在 CAN2，把 `CHANNEL` 从 `"0"` 改成 `"1"` |
-
-### 5.5 Linux 上使用 CANalyst-II
-
-#### 1：安装系统依赖
-```bash
-sudo apt update
-sudo apt install -y python3-pip libusb-1.0-0
-```
-
-#### 2：安装 Python 依赖
-在虚拟环境（venv或conda之类）中安装依赖：
-```bash
-python -m pip install -r requirements.txt
-```
-
-#### 3：配置系统权限（必做）
-
-CANalyst-II 常见 USB ID 是 `04d8:0053`。创建 udev 规则：
-```bash
-echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="04d8", ATTR{idProduct}=="0053", MODE="0666", GROUP="plugdev"' | sudo tee /etc/udev/rules.d/99-canalystii.rules
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-```
-
-确保当前用户在 `plugdev` 组：
-```bash
-id -nG | grep -w plugdev || echo 'not in plugdev'
-```
-
-若不在组内：
-```bash
-sudo usermod -aG plugdev $USER
-```
-
-然后重新登录，可能要拔插一次设备。
-
-#### 4：验证
-
-先看系统是否识别设备：
-```bash
-lsusb | grep -i -E '04d8|can|canalyst|chuangxin'
-```
-
-再跑示例：
-```bash
-python examples/read_wrench.py
-```
-
-Linux 参数与 Windows 一致：
-```python
-INTERFACE = "canalystii"
-CHANNEL = "0"   # CAN1；如果接 CAN2，改为 "1"
-```
-
-#### 常见报错
-- `RuntimeError: Unable to load libusb backend ... dll`：请更新到当前版本代码（已按系统自动选择 `.so/.dylib/.dll`）。
-- `usb.core.USBError: [Errno 13] Access denied`：通常是 udev/用户组权限未生效，重做步骤 3 并重新登录。
+KWR57 固定使用 1 Mbps 标准帧。完成适配器配置后，在下面命令中传入相应的
+`interface` 和 `channel` 即可。
 
 
 ## 6. 使用
@@ -335,4 +201,6 @@ sensor.factory_reset_id()                        # 恢复出厂 0x10 / 0x15
 | `read_wrench` 一直超时返回 None | 比特率不是 1Mbps；CAN_H/CAN_L 接反；缺终端电阻；传感器未上电或未发 `start_stream` |
 | 能收到帧但数值巨大/NaN | 检查是否收到完整 0x15/0x16/0x17 三帧；若原始字节异常，确认传感器型号、CAN ID 和固件配置 |
 | 只收到部分轴 | 只收到 3 帧中的一部分，检查总线负载/丢帧；确认 CAN ID 为 0x15/0x16/0x17 |
-| 打开总线报错 | `interface/channel` 与实际适配器不符，或缺少对应后端驱动 |
+
+适配器无法打开、底层无帧、USB 权限或后端依赖问题，请参阅
+[`CAN-SDK 通用故障排查`](../CAN-SDK/README.md#通用故障排查)。

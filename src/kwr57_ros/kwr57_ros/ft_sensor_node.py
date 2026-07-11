@@ -1,6 +1,6 @@
 """ROS 2 KWR57 device node (bridge mode)
 
-一设备一节点：本节点**不直接开总线**，而是通过通用 ``can_bridge`` 共享总线：
+一设备一节点：本节点**不直接开总线**，而是通过 ``can_bridge_ros`` 共享总线：
   - 订阅 ``rx_topic``（``can_msgs/Frame``，BEST_EFFORT），按本设备的 CAN ID 过滤、
     用 ``kwr57_sensor`` 的协议层组包，发布 ``geometry_msgs/WrenchStamped``；
   - 下发命令（起流/停止/采样率）时，把 ``can_msgs/Frame`` 发布到 ``tx_topic``（RELIABLE）。
@@ -8,7 +8,7 @@
 同一条总线上要挂多个 KWR57：先用 ``examples/set_id.py`` 给每个设备设不同 CAN ID，
 再为每个设备起一个本节点实例（不同 cmd_id/data_base_id/topic/命名空间）。
 
-依赖：先启动 ``can_bridge``（见 ~/can_bridge）独占物理总线。
+依赖：先启动 ``can_bridge_ros`` 独占物理总线。
 
 Topics / Services
 -----------------
@@ -41,6 +41,8 @@ import time
 from typing import List, Optional
 
 import rclpy
+# ROS 2 包 can_msgs 提供的标准 CAN 帧消息；Foxy: apt install ros-foxy-can-msgs
+# 它与负责物理总线 I/O 的 python-can/can_sdk 是不同层次的依赖。
 from can_msgs.msg import Frame
 from geometry_msgs.msg import WrenchStamped
 from rclpy.executors import MultiThreadedExecutor
@@ -49,7 +51,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-# 见 KWR57-SDK；需要安装
+# 见 KWR57-SDK；工作区由 scripts/env.sh 暴露源码，无需安装本地 SDK。
 from kwr57_sensor import Wrench, WrenchAssembler
 from kwr57_sensor import protocol
 from kwr57_sensor import KWR57Sensor

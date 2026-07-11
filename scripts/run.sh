@@ -16,7 +16,7 @@ esac
 source "$(cd "$(dirname "$0")" && pwd)/env.sh"
 
 # 已安装节点可执行文件路径片段，用于兜底清理（避免误杀其它进程）
-NODES='can_bridge/lib/can_bridge/bridge_node|kwr57_ros/lib/kwr57_ros/ft_sensor_node|gloria_ros/lib/gloria_ros/gripper_node'
+NODES='can_bridge_ros/lib/can_bridge_ros/bridge_node|kwr57_ros/lib/kwr57_ros/ft_sensor_node|gloria_ros/lib/gloria_ros/gripper_node'
 
 cleanup() {
   trap - EXIT INT TERM

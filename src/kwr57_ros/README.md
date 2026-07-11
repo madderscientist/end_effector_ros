@@ -1,21 +1,27 @@
 # `kwr57_ros`（ROS 2 封装 · bridge 架构）
 
 坤维 **KWR57** 六轴力/力矩传感器（CAN）的 ROS 2 驱动。采用**"总线作为共享资源"**的
-分层架构：一个通用 [`can_bridge`](../../../can_bridge) 节点独占物理 CAN 总线，KWR57 只是
+分层架构：一个通用 [`can_bridge_ros`](../can_bridge_ros) 节点独占物理 CAN 总线，KWR57 只是
 一个**纯 ROS 设备节点**——订阅总线帧、按自己的 CAN ID 过滤、发布 `WrenchStamped`。
 这样**同一条总线可挂多个同构/异构设备**，每个设备一个节点，不必各自开总线。
 
 ```
-第1层 CAN Driver : python-can 后端（canalystii/socketcan/...）
-第2层 can_bridge : 独占总线；发布所有帧到 /can0/rx，订阅 /can0/tx 下发   ← src/can_bridge
+第1层 can_sdk        : python-can 后端与基础 I/O（无 ROS、无设备协议）
+第2层 can_bridge_ros : 独占总线；发布所有帧到 /can0/rx，订阅 /can0/tx 下发
 第3层 设备节点   : 本包 kwr57_ros，订阅 /can0/rx 过滤自己的 ID，发 WrenchStamped
 ```
 
-数据流：`CAN 帧 → can_bridge(/can0/rx) → kwr57 设备节点(组包) → WrenchStamped`；
-命令：`kwr57 设备节点(build_*) → /can0/tx → can_bridge → 传感器`。
+数据流：`CAN 帧 → can_bridge_ros(/can0/rx) → kwr57 设备节点(组包) → WrenchStamped`；
+命令：`kwr57 设备节点(build_*) → /can0/tx → can_bridge_ros → 传感器`。
 
 消息契约用标准 `can_msgs/msg/Frame`（与 [`ros2_socketcan`] 一致）；日后换 SocketCAN 硬件可
 直接用官方 `ros2_socketcan` 替换 bridge，**设备节点无需改动**。
+
+这里的 `can_msgs` 是上游 ROS 2 消息包，由
+[`ros-industrial/ros_canopen`](https://github.com/ros-industrial/ros_canopen/tree/dashing-devel/can_msgs)
+提供，不属于 `python-can`、`can_sdk` 或 KWR57-SDK。Foxy 使用
+`sudo apt-get install ros-foxy-can-msgs` 安装；本包也在 `package.xml` 中声明了
+`<exec_depend>can_msgs</exec_depend>`。
 
 ---
 
@@ -41,17 +47,19 @@ export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 # 2.1 标准消息包
 sudo apt-get install -y ros-foxy-can-msgs
 
-# 2.2 pip 依赖 + 力传感器 SDK（纯Python，非 ROS 包，供节点 import）
+# 2.2 只安装第三方运行依赖；本地 SDK 不需要安装
 source /opt/ros/foxy/setup.bash
-python3 -m pip install --user 'python-can>=4.0' canalystii 'libusb-package>=1.0.24'
-python3 -m pip install --user -e ~/end_effector_ros/src/KWR57-SDK
+python3 -m pip install --user 'python-can>=4.0' canalystii 'libusb-package>=1.0.30'
 
-# 2.3 构建整个工作区（含 can_bridge / kwr57_ros / gloria_ros 等）
-cd ~/end_effector_ros && colcon build --symlink-install
-source install/setup.bash
+# 2.3 纯 Python SDK 带 COLCON_IGNORE；外部 Gloria-M-SDK 单独排除
+cd ~/end_effector_ros && colcon build --symlink-install --packages-ignore Gloria-M-SDK
+source scripts/env.sh
 ```
 
-CANalyst-II 需 udev 权限（一次性，见 `src/can_bridge/README.md`）。
+`scripts/env.sh` 通过 `PYTHONPATH` 暴露 `CAN-SDK`、`KWR57-SDK` 和 Gloria submodule
+的源码。它们不是 ROS 包，也不会被 colcon 安装；若要在仓库外使用，再选择 `pip install -e`。
+
+CANalyst-II 需 udev 权限（一次性，见 `src/can_bridge_ros/README.md`）。
 
 ---
 
@@ -59,7 +67,7 @@ CANalyst-II 需 udev 权限（一次性，见 `src/can_bridge/README.md`）。
 
 ### 3.1 一条龙 demo（推荐）
 
-`scripts/run.sh` 会 source 好环境、起 **can_bridge + 设备节点**，Ctrl-C 退出时自动清理：
+`scripts/run.sh` 会 source 好环境、起 **can_bridge_ros + 设备节点**，Ctrl-C 退出时自动清理：
 
 ```bash
 bash ~/end_effector_ros/scripts/run.sh          # 单总线
@@ -72,9 +80,11 @@ bash ~/end_effector_ros/scripts/run.sh dual     # 双总线（每臂一条总线
 
 ```bash
 # 终端 A：先起通用 bridge（独占 CANalyst-II CAN1 -> /can0/rx、/can0/tx）
-ros2 launch can_bridge can_bridge.launch.py config:=single_bus.yaml
+source ~/end_effector_ros/scripts/env.sh
+ros2 launch can_bridge_ros can_bridge_ros.launch.py config:=single_bus.yaml
 
 # 终端 B：起 KWR57 设备节点（订阅 /can0/rx，命令发 /can0/tx）
+source ~/end_effector_ros/scripts/env.sh
 ros2 launch kwr57_ros ft_sensor.launch.py rx_topic:=/can0/rx tx_topic:=/can0/tx
 ```
 
@@ -126,7 +136,7 @@ python ~/end_effector_ros/src/KWR57-SDK/examples/set_id.py --interface canalysti
     --host-id 0x11 --sensor-id 0x18 --verify        # 配置 right（此时只接 right）
 
 # 1) 一个 bridge
-ros2 launch can_bridge can_bridge.launch.py config:=single_bus.yaml
+ros2 launch can_bridge_ros can_bridge_ros.launch.py config:=single_bus.yaml
 
 # 2) 每个设备一个节点（不同 cmd_id/data_base_id/node_name/topic）
 ros2 launch kwr57_ros ft_sensor.launch.py node_name:=kwr57_left \
@@ -154,12 +164,13 @@ ros2 launch kwr57_ros ft_sensor.launch.py node_name:=kwr57_right \
 
 | 现象 | 处理 |
 |---|---|
-| 设备节点 `stream start not confirmed` | bridge 没起或 rx/tx 话题名不对；先起 `can_bridge`，确认 `/can0/rx` 有帧 |
+| 设备节点 `stream start not confirmed` | bridge 没起或 rx/tx 话题名不对；先起 `can_bridge_ros`，确认 `/can0/rx` 有帧 |
 | `/can0/rx` 没有帧 | bridge 未连上适配器 / 传感器没上电；或未下发起流命令 |
 | `ros2 topic echo` 一直没输出 | 话题是 BEST_EFFORT，加 `--qos-reliability best_effort` 或用 `wrench_echo` |
 | 满屏 `std::bad_alloc` | 用了默认 FastRTPS；改 CycloneDDS（第 1 节）|
 | `[Errno 16] Resource busy`（bridge 打不开）| 上个 bridge 没关干净：`pkill -INT -f bridge_node`（不行再 `-KILL`）|
-| `No module named 'can'` / `kwr57_sensor` | can 依赖未装进 foxy python：`pip install --user python-can canalystii libusb-package`；kwr57_sensor 未构建：`cd ~/end_effector_ros && colcon build` |
+| `No module named 'can'` | 将 python-can/CANalyst-II 依赖安装到 ROS 使用的系统 Python |
+| `No module named 'can_sdk'` / `kwr57_sensor` | 当前终端未加载 SDK 源码路径；执行 `source ~/end_effector_ros/scripts/env.sh` |
 | 多设备只出一个 | 两设备 CAN ID 相同，先用 set_id.py 改成不同 ID |
 
 ---
@@ -169,8 +180,9 @@ ros2 launch kwr57_ros ft_sensor.launch.py node_name:=kwr57_right \
 ```
 ~/end_effector_ros/                  ← 一个 colcon 工作区（见顶层 README）
 └── src/
-    ├── can_bridge/                  通用 CAN bridge（第2层，多通道）
-    ├── KWR57-SDK/                   力传感器 SDK（纯Python，非ROS包；协议层被设备节点复用）
+    ├── CAN-SDK/                     无 ROS 的 CAN 后端与基础 I/O
+    ├── can_bridge_ros/              通用 ROS 2 CAN bridge（第2层，多通道）
+    ├── KWR57-SDK/                   力传感器 SDK（协议层被设备节点复用）
     │   └── examples/set_id.py       设置/复位设备 CAN ID（多设备前置）
     └── kwr57_ros/                   本包（力传感器 ROS 设备节点）
         └── kwr57_ros/

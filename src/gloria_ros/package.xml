@@ -3,7 +3,7 @@
 <package format="3">
   <name>gloria_ros</name>
   <version>0.1.0</version>
-  <description>ROS 2 device node for the Gloria-M gripper (bridge mode; reuses gloria_m_sdk MIT protocol). One gripper = one node, sharing a CAN bus via can_bridge.</description>
+  <description>ROS 2 Gloria-M gripper node sharing a CAN bus through can_bridge_ros.</description>
 
   <maintainer email="unitree@example.com">unitree</maintainer>
   <license>MIT</license>
@@ -12,6 +12,7 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
+  <!-- 上游 ROS 2 can_msgs 包提供 can_msgs/msg/Frame；Foxy 二进制包：ros-foxy-can-msgs。 -->
   <exec_depend>can_msgs</exec_depend>
   <exec_depend>ros2launch</exec_depend>
   <!-- gloria_m_sdk（协议层）由本包在运行时按 submodule 路径导入；见 gripper_node.py。 -->

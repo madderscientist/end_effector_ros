@@ -1,0 +1,10 @@
+# 双总线：一个 CANalyst-II 进程同时打开 CAN1/CAN2，避免重复打开 USB 设备。
+/**:
+  ros__parameters:
+    interface: canalystii
+    channel: "0,1"
+    bitrate: 1000000
+    channel_ids: [0, 1]
+    bus_names: ["can0", "can1"]
+    rx_queue_depth: 1000
+    receive_own_messages: false

@@ -12,9 +12,9 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
+  <!-- 上游 ROS 2 can_msgs 包提供 can_msgs/msg/Frame；Foxy 二进制包：ros-foxy-can-msgs。 -->
   <exec_depend>can_msgs</exec_depend>
   <exec_depend>ros2launch</exec_depend>
-  <!-- KWR57-SDK(kwr57_sensor) 与 python-can 由 pip 装进 ROS 2 的 Python；见 README。 -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

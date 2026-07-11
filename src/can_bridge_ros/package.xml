@@ -1,18 +1,19 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>can_bridge</name>
+  <name>can_bridge_ros</name>
   <version>0.1.0</version>
-  <description>Generic ROS 2 CAN bus bridge: one node owns a python-can bus and bridges all frames to/from can_msgs/Frame. Device-agnostic; reusable by any CAN device node.</description>
+  <description>Generic ROS 2 CAN bridge using the shared ROS-independent can_sdk backend.</description>
 
   <maintainer email="unitree@example.com">unitree</maintainer>
   <license>MIT</license>
 
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>python3-can</exec_depend>
   <exec_depend>rclpy</exec_depend>
+  <!-- 上游 ROS 2 can_msgs 包提供 can_msgs/msg/Frame；Foxy 二进制包：ros-foxy-can-msgs。 -->
   <exec_depend>can_msgs</exec_depend>
   <exec_depend>ros2launch</exec_depend>
-  <!-- python-can (+ canalystii/libusb-package for CANalyst-II) is pip-installed
-       into the ROS 2 Python; see README. -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

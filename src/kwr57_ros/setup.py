@@ -13,7 +13,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
     ],
-    # kwr57_sensor(SDK) + python-can 由 pip 装进 ROS 2 的 Python；见 README。
+    # kwr57_sensor/can_sdk 是纯 Python SDK，由 scripts/env.sh 或 pip 暴露。
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='madderscientist',

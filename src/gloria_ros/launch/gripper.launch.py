@@ -1,6 +1,6 @@
 """Launch one Gloria-M gripper device node (bridge mode).
 
-需要先启动 can_bridge（独占物理总线）。
+需要先启动 can_bridge_ros（独占物理总线）。
 
 Examples:
   ros2 launch gloria_ros gripper.launch.py rx_topic:=/can0/rx tx_topic:=/can0/tx

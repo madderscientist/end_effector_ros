@@ -2,7 +2,7 @@
 
 分层结构：
     protocol   协议层：常量、指令构造、数据帧解码（纯逻辑）
-    transport  传输层：封装 python-can，屏蔽 USB-CAN 适配器差异
+    transport  传输兼容层：复用 can_sdk，并提供 KWR57 默认比特率
     driver     驱动层：KWR57Sensor 高层 API
     cli        应用层：命令行实时读取工具
 """

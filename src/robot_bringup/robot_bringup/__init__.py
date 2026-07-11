@@ -1,1 +1,1 @@
-"""robot_bringup 共享的 launch 辅助函数：构造 can_bridge / 力传感器 / 夹爪节点。"""
+"""robot_bringup 共享 launch 辅助函数：构造 CAN bridge 与设备节点。"""

@@ -1,4 +1,4 @@
-"""构造 can_bridge / 力传感器 / 夹爪 launch 节点的辅助函数。"""
+"""构造 can_bridge_ros / 力传感器 / 夹爪 launch 节点的辅助函数。"""
 
 import os
 
@@ -9,9 +9,10 @@ from launch_ros.actions import Node
 
 
 def bridge(config: str):
-    """包含通用 can_bridge，用给定 config（single_bus.yaml / dual_bus.yaml）。"""
+    """包含通用 can_bridge_ros，用给定单/双总线配置。"""
     src = os.path.join(
-        get_package_share_directory("can_bridge"), "launch", "can_bridge.launch.py")
+        get_package_share_directory("can_bridge_ros"),
+        "launch", "can_bridge_ros.launch.py")
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(src),
         launch_arguments={"config": config}.items())

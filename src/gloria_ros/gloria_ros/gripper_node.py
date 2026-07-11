@@ -1,6 +1,6 @@
 """ROS 2 Gloria-M 夹爪设备节点（bridge 模式，骨架 + 能收发帧）。
 
-不直接开总线，经通用 ``can_bridge`` 共享总线：
+不直接开总线，经通用 ``can_bridge_ros`` 共享总线：
   - 订阅 ``rx_topic``（can_msgs/Frame），过滤本电机的 ``feedback_id``，用夹爪 SDK 的
     ``unpack_mit_feedback`` 解析 MIT 反馈，发布 ``sensor_msgs/JointState``；
   - 收到目标位置命令（std_msgs/Float64）时用 SDK 的 ``pack_mit_command`` 打包 MIT 帧，
@@ -11,18 +11,18 @@
 兼容 Python 3.8，无需 SDK 的串口传输层（SDK 整体要求 3.11，但协议层不涉及）。
 
 一夹爪一节点；同一条总线多个夹爪就多起几个节点（不同 command_id/feedback_id）。
-先启动 ``can_bridge`` 独占物理总线。
+先启动 ``can_bridge_ros`` 独占物理总线。
 
 ⚠️ 骨架版：控制目前是"目标位置 + 固定 kp/kd 的 MIT"，寄存器/模式切换等按夹爪手册后续完善。
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Optional
 
 import rclpy
+# ROS 2 包 can_msgs 提供的标准 CAN 帧消息；Foxy: apt install ros-foxy-can-msgs
+# 它不是 Gloria SDK、python-can 或本项目 can_sdk 提供的类型
 from can_msgs.msg import Frame
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -30,17 +30,13 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64
 from std_srvs.srv import Trigger
 
-# 复用夹爪 SDK 的协议层：把 submodule 的 src 加入 sys.path（--symlink-install 下 __file__ 指向源码）
-_SDK_SRC = Path(__file__).resolve().parents[2] / "Gloria-M-SDK" / "src"
-if _SDK_SRC.is_dir() and str(_SDK_SRC) not in sys.path:
-    sys.path.insert(0, str(_SDK_SRC))
 try:
     from gloria_m_sdk.protocol_mit import pack_mit_command, unpack_mit_feedback
     from gloria_m_sdk.types import Limits
 except Exception as _exc:  # noqa: BLE001
     raise ImportError(
         f"无法导入夹爪 SDK 协议层（gloria_m_sdk）：{_exc}. "
-        f"确认 submodule 已拉取：{_SDK_SRC}") from _exc
+        "确认 submodule 已拉取，并先 source scripts/env.sh") from _exc
 
 # 控制帧（使能/失能/置零）：data = [0xFF*7, cmd]
 _CTRL_ENABLE = 0xFC

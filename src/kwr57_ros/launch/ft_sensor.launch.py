@@ -1,7 +1,7 @@
 """Launch ONE KWR57 device node
 
 两种模式：
-  - bridge 模式（默认）：需先跑 ``can_bridge`` 独占总线，本节点只订阅
+  - bridge 模式（默认）：需先跑 ``can_bridge_ros`` 独占总线，本节点只订阅
     ``rx_topic`` / 发 ``tx_topic``。适合多设备共享总线/中低频。
   - direct 模式（``direct_bus:=true``）：本节点用 SDK 紧循环直接开总线+组包，
     只发 ~1000Hz 的 WrenchStamped（可跑满）。direct 模式独占物理 CAN 设备，

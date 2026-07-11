@@ -1,7 +1,7 @@
 # end_effector_ros
 
 末端执行器（力传感器 + 夹爪）的 ROS 2 集成工作区，采用 **"CAN 总线作为共享资源"** 的分层架构：
-一个通用 `can_bridge` 独占物理 CAN 总线，各设备只是 **订阅总线帧、按 CAN ID 过滤** 的独立
+一个通用 `can_bridge_ros` 独占物理 CAN 总线，各设备只是 **订阅总线帧、按 CAN ID 过滤** 的独立
 设备节点。**一设备一节点**，同一条总线可挂多个同构/异构设备；换接线只换启动配置，驱动不改。
 
 设备：2 个力传感器（KWR57）+ 2 个夹爪（Gloria-M）。支持两种接线：
@@ -9,13 +9,16 @@
 - **双总线**：一个力传感器 + 一个夹爪为一组（一个手臂），分别接两条总线（`/can0`、`/can1`）。
 
 ```
-第1层 CAN Driver : python-can 后端（canalystii/socketcan/...）
-第2层 can_bridge : 独占一个 USB-CAN 设备、可同时桥接多通道；发布 /canX/rx，订阅 /canX/tx
+第1层 can_sdk        : 无 ROS 的 python-can 后端、CANalyst-II 准备和单消费者基础 I/O
+第2层 can_bridge_ros : 独占一个 USB-CAN 设备、可同时桥接多通道；发布 /canX/rx，订阅 /canX/tx
 第3层 设备节点    : kwr57_ros / gloria_ros，各订阅 /canX/rx 过滤自己的 ID
 第4层 bringup    : robot_bringup 用 launch/config 描述单/双总线接线
 ```
 
-消息契约用标准 `can_msgs/Frame`（与 [ros2_socketcan](https://index.ros.org/p/ros2_socketcan/) 一致）；日后换 SocketCAN 硬件可直接换官方桥。
+消息契约使用上游 ROS 2 [`can_msgs`](https://index.ros.org/p/can_msgs/) 包提供的
+`can_msgs/Frame`（与 [ros2_socketcan](https://index.ros.org/p/ros2_socketcan/) 一致）。
+它是 ROS 消息定义，不属于 `python-can` 或本项目的 `can_sdk`；Foxy 对应系统包为
+`ros-foxy-can-msgs`。日后换 SocketCAN 硬件可直接换官方桥。
 
 
 ## 目录
@@ -27,7 +30,8 @@ end_effector_ros/                 一个 colcon workspace
 ├── .gitmodules
 ├── scripts/                      env.sh（环境）/ run.sh（一键单/双总线，含清理）
 └── src/
-    ├── can_bridge/               通用 CAN bridge（多通道）
+    ├── CAN-SDK/                  通用 CAN 基础库（无 ROS、无设备协议）
+    ├── can_bridge_ros/           通用 ROS 2 CAN bridge（多通道）
     |
     ├── KWR57-SDK/                力传感器 SDK（纯Python，pip 安装；非ROS可用）
     ├── kwr57_ros/                力传感器 ROS 设备节点（import kwr57_sensor）
@@ -38,7 +42,9 @@ end_effector_ros/                 一个 colcon workspace
     └── robot_bringup/            单/双总线 launch + config
 ```
 
-- SDK 保留：`KWR57-SDK`(模块 `kwr57_sensor`) 和 `gloria_m_sdk` 都作为纯 Python SDK 保留供非 ROS 使用；ROS 封装复用 SDK 的方法，不重复实现。
+- SDK 保留：`CAN-SDK`（模块 `can_sdk`）、`KWR57-SDK`（模块 `kwr57_sensor`）和 `gloria_m_sdk` 均可脱离 ROS 使用；ROS 封装只复用基础 I/O 和设备协议，不重复实现。
+- 三个 SDK 均不作为 ROS 包，且不由 colcon 构建；`scripts/env.sh` 统一把它们的源码目录加入 `PYTHONPATH`。ROS 节点不需要先安装本地 SDK，也不在节点代码中修改 `sys.path`。
+- `can_sdk` 刻意不提供多订阅：直连 SDK 的 `recv()` 是单消费者语义；ROS 多设备系统由 `can_bridge_ros` 成为物理总线的唯一接收者并通过话题分发。
 - 夹爪 SDK 整体要求 Python≥3.11，但其 `protocol_mit`/`types` 兼容 3.8，故 `gloria_ros` 只 import 这部分（运行时按 submodule 路径加载），绕开版本限制、无需 SDK 的串口传输层。
 
 
@@ -47,31 +53,36 @@ end_effector_ros/                 一个 colcon workspace
 ROS 2 节点跑在 **foxy 系统 `python3`(3.8)**；运行用 **CycloneDDS**（默认 FastRTPS 会刷 `std::bad_alloc`）。
 
 ```bash
-# 一次性依赖
+# 一次性依赖；ros-foxy-can-msgs 提供 Python 导入 can_msgs.msg.Frame
 sudo apt-get install -y ros-foxy-can-msgs
 source /opt/ros/foxy/setup.bash
-python3 -m pip install --user 'python-can>=4.0' canalystii 'libusb-package>=1.0.24' pyserial
+python3 -m pip install --user 'python-can>=4.0' canalystii 'libusb-package>=1.0.30' pyserial
 
 # 拉取含 submodule 的仓库
 git clone --recurse-submodules <本仓库URL> ~/end_effector_ros
 # 已克隆则： git submodule update --init --recursive
 
-# SDK 安装，供 ROS 节点 import
-python3 -m pip install --user -e ~/end_effector_ros/src/KWR57-SDK
-python3 -m pip install --user -e ~/end_effector_ros/src/Gloria-M-SDK
-
-# 构建（KWR57-SDK 带 COLCON_IGNORE，不被 colcon 编译；Gloria-M-SDK 是 submodule 不好修改，需要用 --packages-ignore 指明）
+# CAN-SDK 与 KWR57-SDK 带 COLCON_IGNORE；Gloria-M-SDK 是外部 submodule，
+# 不修改其内容并在构建时排除。colcon 只构建 ROS 包。
 cd ~/end_effector_ros
-colcon build --symlink-install --packages-ignore KWR57-SDK Gloria-M-SDK
-source install/setup.bash
+colcon build --symlink-install --packages-ignore Gloria-M-SDK
+source scripts/env.sh
 ```
 
-CANalyst-II 需 udev 权限（VID:PID 04d8:0053），见 `src/can_bridge/README.md`。
+CANalyst-II 需 udev 权限（VID:PID 04d8:0053），见 `src/can_bridge_ros/README.md`。
+
+`scripts/env.sh` 会将 `CAN-SDK`、`KWR57-SDK` 与 Gloria submodule 的源码目录加入
+`PYTHONPATH`，随后加载 ROS 和工作区环境。若要在仓库外独立使用 SDK，可选择安装：
+
+```bash
+python3 -m pip install -e './src/CAN-SDK[canalystii]'
+python3 -m pip install -e ./src/KWR57-SDK
+```
 
 
 ## 运行
 
-先 source CycloneDDS 环境（见上）与 `install/setup.bash`。
+每个手动运行 ROS 命令的终端先 source `scripts/env.sh`；一键脚本会自动处理。
 
 ```bash
 # 一键（推荐）：脚本 source 好环境、起整套、Ctrl-C 自动清理
@@ -91,6 +102,6 @@ ros2 launch robot_bringup dual_bus.launch.py
 话题：`/ft_left/wrench_raw`、`/grip_left/joint_states` 等。BEST_EFFORT，`ros2 topic echo` 加
 `--qos-reliability best_effort` 或用 `ros2 run kwr57_ros wrench_echo`。
 
-各包细节见各自 README：`src/can_bridge/README.md`、`src/kwr57_ros/README.md`。
+各包细节见各自 README：`src/CAN-SDK/README.md`、`src/can_bridge_ros/README.md`、`src/kwr57_ros/README.md`。
 
 [ros2_socketcan]: https://github.com/autowarefoundation/ros2_socketcan
