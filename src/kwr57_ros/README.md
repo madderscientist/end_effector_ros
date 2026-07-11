@@ -2,16 +2,17 @@
 
 坤维 **KWR57** 六轴力/力矩传感器（CAN）的 ROS 2 驱动。采用**"总线作为共享资源"**的
 分层架构：一个通用 [`can_bridge_ros`](../can_bridge_ros) 节点独占物理 CAN 总线，KWR57 只是
-一个**纯 ROS 设备节点**——订阅总线帧、按自己的 CAN ID 过滤、发布 `WrenchStamped`。
+一个**纯 ROS 设备节点**——订阅 bridge 按 CAN ID 分配的专属 RX 话题、组包并发布
+`WrenchStamped`；未配置路由时也可订阅默认总线 RX 并自行过滤。
 这样**同一条总线可挂多个同构/异构设备**，每个设备一个节点，不必各自开总线。
 
 ```
 第1层 can_sdk        : python-can 后端与基础 I/O（无 ROS、无设备协议）
-第2层 can_bridge_ros : 独占总线；发布所有帧到 /can0/rx，订阅 /can0/tx 下发
-第3层 设备节点   : 本包 kwr57_ros，订阅 /can0/rx 过滤自己的 ID，发 WrenchStamped
+第2层 can_bridge_ros : 独占总线；按 CAN ID 路由高频 RX，订阅 /can0/tx 下发
+第3层 设备节点   : 本包 kwr57_ros，订阅设备专属 RX，发 WrenchStamped
 ```
 
-数据流：`CAN 帧 → can_bridge_ros(/can0/rx) → kwr57 设备节点(组包) → WrenchStamped`；
+高频数据流：`CAN 帧 → can_bridge_ros(/can0/ft_left/rx) → kwr57 节点(组包) → WrenchStamped`；
 命令：`kwr57 设备节点(build_*) → /can0/tx → can_bridge_ros → 传感器`。
 
 消息契约用标准 `can_msgs/msg/Frame`（与 [`ros2_socketcan`] 一致）；日后换 SocketCAN 硬件可
@@ -79,16 +80,17 @@ bash ~/end_effector_ros/scripts/run.sh dual     # 双总线（每臂一条总线
 ### 3.2 手动分步（两个终端）
 
 ```bash
-# 终端 A：先起通用 bridge（独占 CANalyst-II CAN1 -> /can0/rx、/can0/tx）
+# 终端 A：单独起通用 bridge；物理 YAML 不包含设备路由
 source ~/end_effector_ros/scripts/env.sh
 ros2 launch can_bridge_ros can_bridge_ros.launch.py config:=single_bus.yaml
 
-# 终端 B：起 KWR57 设备节点（订阅 /can0/rx，命令发 /can0/tx）
+# 终端 B：调试模式直接订阅默认总线 RX
 source ~/end_effector_ros/scripts/env.sh
 ros2 launch kwr57_ros ft_sensor.launch.py rx_topic:=/can0/rx tx_topic:=/can0/tx
 ```
 
-> 先起 bridge 再起设备节点；bridge 没起时设备节点会提示 "stream start not confirmed"。
+> 这种手动方式用于单设备调试，没有高频 ID 分流。多设备 1 kHz 部署应直接启动
+> `robot_bringup`，由它在启动时生成专属路由。
 
 ---
 
@@ -96,21 +98,22 @@ ros2 launch kwr57_ros ft_sensor.launch.py rx_topic:=/can0/rx tx_topic:=/can0/tx
 
 | 方向 | 名称 | 类型 | 说明 |
 |---|---|---|---|
-| 订阅 | `<rx_topic>` (默认 `/can0/rx`) | `can_msgs/Frame` | 来自 bridge 的所有总线帧 |
+| 订阅 | `<rx_topic>` (默认 `/can0/rx`) | `can_msgs/Frame` | bridge 默认 RX 或 bringup 专属路由帧 |
 | 发布 | `<tx_topic>` (默认 `/can0/tx`) | `can_msgs/Frame` | 下发给 bridge 的命令帧 |
-| 发布 | `<topic>` (默认 `~/wrench_raw`) | `geometry_msgs/WrenchStamped` | 六轴力/力矩，BEST_EFFORT/KEEP_LAST(200) |
+| 发布 | `<topic>` (默认 `~/wrench_raw`) | `geometry_msgs/WrenchStamped` | 六轴力/力矩，BEST_EFFORT/KEEP_LAST(32) |
 | 订阅 | `~/command` | `std_msgs/String` | `start`/`stop`/`tare`(别名`zero`)/`reset_tare` |
 
 服务（`std_srvs/Trigger`）：`~/start` `~/stop` `~/tare`（软件调零：下一帧作零点）`~/reset_tare`。
 
-> **QoS**：`wrench_raw` 是 BEST_EFFORT，`ros2 topic echo` 需加 `--qos-reliability best_effort`，
+> **QoS**：RX 是 BEST_EFFORT/KEEP_LAST(128)，`wrench_raw` 是
+> BEST_EFFORT/KEEP_LAST(32)。`ros2 topic echo` 需加 `--qos-reliability best_effort`，
 > 或用 `ros2 run kwr57_ros wrench_echo`。
 
 参数（及默认）：
 
 | 名称 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `rx_topic` | string | `/can0/rx` | bridge 发布的总线帧话题 |
+| `rx_topic` | string | `/can0/rx` | bridge RX；完整 bringup 会自动改为设备专属话题 |
 | `tx_topic` | string | `/can0/tx` | bridge 订阅的命令帧话题 |
 | `cmd_id` | int | `16`(0x10) | 本设备命令(接收)CAN ID |
 | `data_base_id` | int | `21`(0x15) | 本设备数据起始 CAN ID（帧 base/+1/+2）|
@@ -127,7 +130,14 @@ ros2 launch kwr57_ros ft_sensor.launch.py rx_topic:=/can0/rx tx_topic:=/can0/tx
 
 ## 5. 多设备（同一条总线挂多个 KWR57）
 
-新架构下"多设备"很自然：**共享一个 bridge，每个设备起一个设备节点**，各自过滤自己的 CAN ID。
+多设备共享一个 bridge，每个设备仍是独立节点。生产启动由
+[`robot_bringup/launch`](../robot_bringup/launch) 中的一份 `Kwr57Device` 清单同时生成：
+
+- bridge 的三条数据 CAN ID 路由；
+- 设备节点的 `rx_topic`、`cmd_id`、`data_base_id`、输出话题和 `frame_id`。
+
+因此 CAN ID 和专属话题只声明一次，启动时还会检查同一通道的命令 ID、数据 ID、节点名
+和专属话题是否冲突。
 
 ```bash
 # 0) 先用 examples/set_id.py 给每个传感器设不同 CAN ID（各接一个、逐个改）：
@@ -135,18 +145,35 @@ ros2 launch kwr57_ros ft_sensor.launch.py rx_topic:=/can0/rx tx_topic:=/can0/tx
 python ~/end_effector_ros/src/KWR57-SDK/examples/set_id.py --interface canalystii --channel 0 \
     --host-id 0x11 --sensor-id 0x18 --verify        # 配置 right（此时只接 right）
 
-# 1) 一个 bridge
-ros2 launch can_bridge_ros can_bridge_ros.launch.py config:=single_bus.yaml
-
-# 2) 每个设备一个节点（不同 cmd_id/data_base_id/node_name/topic）
-ros2 launch kwr57_ros ft_sensor.launch.py node_name:=kwr57_left \
-    cmd_id:=16 data_base_id:=21 topic:=/left/wrench_raw frame_id:=left_ft_link
-ros2 launch kwr57_ros ft_sensor.launch.py node_name:=kwr57_right \
-    cmd_id:=17 data_base_id:=24 topic:=/right/wrench_raw frame_id:=right_ft_link
+# 1) 确认 single_bus.launch.py 中两台 Kwr57Device 的 ID 与硬件一致
+# 2) 一次启动 bridge、两台 KWR57 和两台 Gloria-M
+ros2 launch robot_bringup single_bus.launch.py
 ```
 
 > ⚠️ 两个未改 ID 的设备会发出**相同的 CAN ID**，无法区分且冲突——必须先设不同 ID。
 > 设 ID 见 `examples/set_id.py`（非 ROS，直接开总线；配置时请**只接一个设备**）。
+
+### 5.1 1 kHz 数据路径
+
+- `can_bridge_ros` 对每个物理接收帧只发布一次：KWR57 数据 ID 进入设备专属话题，
+  其他 ID 进入默认 `/canX/rx`，避免两个 KWR57 和两个 Gloria-M 节点重复处理全部高频帧。
+- 每个 KWR57 节点使用 `SingleThreadedExecutor`。这里只有一个高频订阅，线程池会增加
+  CPython GIL 竞争和任务调度开销。
+- 一个 KWR57 每个样本占三帧；两台设备在 1 kHz 时合计 6000 frame/s。1 Mbps 标准 CAN
+  无位填充时约占 666 kbit/s，按最坏位填充估算约 810 kbit/s，仍可容纳低频夹爪通信，
+  但布线、终端电阻、USB 稳定性和夹爪发送频率都会影响实际余量。
+- 修改传感器 ID 后，只同步修改对应 bringup launch 中该设备的 `cmd_id` 和
+  `data_base_id`；专属路由会由同一个 `Kwr57Device` 自动重新生成。
+
+目标机上逐个检查两个输出（工具每秒打印一次，避免控制台 I/O 干扰高频回调）：
+
+```bash
+ros2 run kwr57_ros wrench_echo --ros-args -p topic:=/ft_left/wrench_raw
+ros2 run kwr57_ros wrench_echo --ros-args -p topic:=/ft_right/wrench_raw
+```
+
+测频订阅者本身也占用 CPU；最终控制节点应保持 BEST_EFFORT，并避免同时运行多个
+`topic echo/hz` 或可视化订阅者干扰高频测试。
 
 ---
 
@@ -164,9 +191,11 @@ ros2 launch kwr57_ros ft_sensor.launch.py node_name:=kwr57_right \
 
 | 现象 | 处理 |
 |---|---|
-| 设备节点 `stream start not confirmed` | bridge 没起或 rx/tx 话题名不对；先起 `can_bridge_ros`，确认 `/can0/rx` 有帧 |
-| `/can0/rx` 没有帧 | bridge 未连上适配器 / 传感器没上电；或未下发起流命令 |
+| 设备节点 `stream start not confirmed` | bridge 没起、bringup 清单与传感器实际 ID 不一致，或命令未送达 |
+| 专属 RX 没有帧 | 检查 `Kwr57Device` 的总线/ID、传感器实际 ID、供电、接线和起流命令 |
+| `/can0/rx` 看不到 KWR57 帧 | 配置路由后的正常行为；KWR57 帧只进入设备专属 RX |
 | `ros2 topic echo` 一直没输出 | 话题是 BEST_EFFORT，加 `--qos-reliability best_effort` 或用 `wrench_echo` |
+| 发布频率低于 1 kHz | 确认使用 CycloneDDS、专属 RX 和 `period_ms=1`；停止额外 echo/hz 后检查总线错误与 CPU |
 | 满屏 `std::bad_alloc` | 用了默认 FastRTPS；改 CycloneDDS（第 1 节）|
 | `[Errno 16] Resource busy`（bridge 打不开）| 上个 bridge 没关干净：`pkill -INT -f bridge_node`（不行再 `-KILL`）|
 | `No module named 'can'` | 将 python-can/CANalyst-II 依赖安装到 ROS 使用的系统 Python |

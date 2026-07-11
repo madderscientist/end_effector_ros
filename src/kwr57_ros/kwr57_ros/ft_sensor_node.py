@@ -1,8 +1,9 @@
 """ROS 2 KWR57 device node (bridge mode)
 
 一设备一节点：本节点**不直接开总线**，而是通过 ``can_bridge_ros`` 共享总线：
-  - 订阅 ``rx_topic``（``can_msgs/Frame``，BEST_EFFORT），按本设备的 CAN ID 过滤、
-    用 ``kwr57_sensor`` 的协议层组包，发布 ``geometry_msgs/WrenchStamped``；
+    - 订阅 ``rx_topic``（``can_msgs/Frame``，BEST_EFFORT）。高频部署由 bridge 按 CAN ID
+        路由到设备专属话题；未配置路由时，本节点仍会自行过滤总线帧；
+    - 用 ``kwr57_sensor`` 的协议层组包，发布 ``geometry_msgs/WrenchStamped``；
   - 下发命令（起流/停止/采样率）时，把 ``can_msgs/Frame`` 发布到 ``tx_topic``（RELIABLE）。
 
 同一条总线上要挂多个 KWR57：先用 ``examples/set_id.py`` 给每个设备设不同 CAN ID，
@@ -20,7 +21,7 @@ services:   ~/start ~/stop ~/tare ~/reset_tare  std_srvs/Trigger
 
 Parameters
 ----------
-  rx_topic        string  default "/can0/rx"     bridge 发布的总线帧话题
+    rx_topic        string  default "/can0/rx"     bridge RX；bringup 会改为专属话题
   tx_topic        string  default "/can0/tx"     bridge 订阅的命令帧话题
   cmd_id          int     default 0x10           本设备命令(接收)CAN ID
   data_base_id    int     default 0x15           本设备数据起始 CAN ID (帧 base/+1/+2)
@@ -45,16 +46,15 @@ import rclpy
 # 它与负责物理总线 I/O 的 python-can/can_sdk 是不同层次的依赖。
 from can_msgs.msg import Frame
 from geometry_msgs.msg import WrenchStamped
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-# 见 KWR57-SDK；工作区由 scripts/env.sh 暴露源码，无需安装本地 SDK。
+# 见 KWR57-SDK；工作区由 scripts/env.sh 暴露源码，无需安装本地 SDK
 from kwr57_sensor import Wrench, WrenchAssembler
 from kwr57_sensor import protocol
-from kwr57_sensor import KWR57Sensor
 
 _CMD_SETTLE_S = 0.1
 
@@ -75,21 +75,12 @@ class KWR57DeviceNode(Node):
         self.declare_parameter("use_si", False)
         self.declare_parameter("autostart", True)
         self.declare_parameter("tare_on_start", False)
-        # --- direct-bus (high-rate) mode ---------------------------------
-        # bridge 模式逐帧走 DDS，在本机 1000Hz(3000 帧/s) 下会因 GIL 争用丢帧、wrench 掉到 ~130Hz
-        # direct 模式让本节点用 SDK 紧循环直接读总线+组包，只发布 ~1000Hz 的 WrenchStamped（实测可满速）
-        # 注意：direct 模式独占物理 CAN 设备，同一设备上不能再跑 bridge 或其它节点
-        self.declare_parameter("direct_bus", False)
-        self.declare_parameter("interface", "canalystii")
-        self.declare_parameter("channel", "0")
-        self.declare_parameter("bitrate", 1_000_000)
 
         gp = self.get_parameter
         rx_topic = str(gp("rx_topic").value)
         tx_topic = str(gp("tx_topic").value)
         self._cmd_id = int(gp("cmd_id").value)
         data_base_id = int(gp("data_base_id").value)
-        self._data_base_id = data_base_id
         topic = str(gp("topic").value)
         frame_id = str(gp("frame_id").value)
         self._period_ms = int(gp("period_ms").value)
@@ -98,10 +89,6 @@ class KWR57DeviceNode(Node):
         self._use_si = bool(gp("use_si").value)
         autostart = bool(gp("autostart").value)
         tare_on_start = bool(gp("tare_on_start").value)
-        self._direct = bool(gp("direct_bus").value)
-        self._interface = str(gp("interface").value)
-        self._channel = str(gp("channel").value)
-        self._bitrate = int(gp("bitrate").value)
 
         self._data_ids = protocol.data_ids_from_base(data_base_id)
         self._assembler = WrenchAssembler(self._data_ids)
@@ -109,23 +96,19 @@ class KWR57DeviceNode(Node):
         # --- ROS interface ------------------------------------------------
         rx_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST, depth=200)
+            history=HistoryPolicy.KEEP_LAST, depth=128)
         tx_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST, depth=100)
         wrench_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
-            history=HistoryPolicy.KEEP_LAST, depth=200)
+            history=HistoryPolicy.KEEP_LAST, depth=32)
 
         self._pub = self.create_publisher(WrenchStamped, topic, wrench_qos)
-        # bridge 模式才需要 rx 订阅 / tx 发布；direct 模式直接开总线
-        self._tx_pub = None
-        self._rx_sub = None
-        if not self._direct:
-            self._tx_pub = self.create_publisher(Frame, tx_topic, tx_qos)
-            self._rx_sub = self.create_subscription(
-                Frame, rx_topic, self._on_frame, rx_qos)
+        self._tx_pub = self.create_publisher(Frame, tx_topic, tx_qos)
+        self._rx_sub = self.create_subscription(
+            Frame, rx_topic, self._on_frame, rx_qos)
         self._cmd_sub = self.create_subscription(
             String, "~/command", self._on_command, 10)
         self._srv_start = self.create_service(Trigger, "~/start", self._srv_start_cb)
@@ -140,29 +123,17 @@ class KWR57DeviceNode(Node):
         self._streaming = False
         self._last_pub = 0.0
         self._min_period = 1.0 / self._publish_rate if self._publish_rate > 0.0 else 0.0
-
-        # direct 模式的总线/线程状态
-        self._sensor = None
-        self._direct_thread: Optional[threading.Thread] = None
+        self._start_lock = threading.Lock()
+        self._start_cancel: Optional[threading.Event] = None
+        self._start_thread: Optional[threading.Thread] = None
 
         self._msg = WrenchStamped()
         self._msg.header.frame_id = frame_id
 
-        mode = "DIRECT" if self._direct else "bridge"
-        src = (f"{self._interface}:{self._channel}@{self._bitrate}"
-               if self._direct else f"rx='{rx_topic}' tx='{tx_topic}'")
         self.get_logger().info(
-            f"KWR57 device [{mode}]: cmd_id=0x{self._cmd_id:X} "
+            f"KWR57 device [bridge]: cmd_id=0x{self._cmd_id:X} "
             f"data_ids={'/'.join(f'0x{c:X}' for c in self._data_ids)}  "
-            f"{src} -> {topic} (si={self._use_si})")
-
-        if self._direct:
-            self._tare_on_start = tare_on_start
-            if autostart:
-                self._start_direct()
-            else:
-                self.get_logger().info("waiting for start command (direct)")
-            return
+            f"rx='{rx_topic}' tx='{tx_topic}' -> {topic} (si={self._use_si})")
 
         if autostart:
             self._start_async(tare=tare_on_start)
@@ -180,99 +151,67 @@ class KWR57DeviceNode(Node):
         self._tx_pub.publish(f)
 
     def _start_async(self, tare: bool) -> None:
-        if self._direct:
-            self._start_direct(tare=tare)
-            return
-        threading.Thread(target=self._start_sequence, args=(tare,), daemon=True).start()
+        with self._start_lock:
+            if self._start_thread is not None and self._start_thread.is_alive():
+                self.get_logger().info("stream start already in progress")
+                return
+            cancel = threading.Event()
+            thread = threading.Thread(
+                target=self._start_sequence, args=(tare, cancel), daemon=True)
+            self._start_cancel = cancel
+            self._start_thread = thread
+            thread.start()
 
-    # --- direct-bus mode (SDK tight loop, no per-frame DDS) ---------------
-    def _start_direct(self, tare: bool = False) -> None:
-        if self._direct_thread is not None and self._direct_thread.is_alive():
-            self.get_logger().info("direct stream already running")
-            return
-        if tare:
-            self._tare_pending = True
-        self._streaming = True
-        self._direct_thread = threading.Thread(target=self._direct_loop, daemon=True)
-        self._direct_thread.start()
-
-    def _direct_loop(self) -> None:
-        """用 SDK 紧循环直接读总线+组包，只发布 WrenchStamped（可跑满 ~1000Hz）。"""
-        try:
-            if self._sensor is None:
-                self._sensor = KWR57Sensor.open(
-                    interface=self._interface, channel=self._channel,
-                    bitrate=self._bitrate, cmd_id=self._cmd_id,
-                    data_base_id=self._data_base_id)
-            self._sensor.start_stream(period_ms=self._period_ms,
-                                      rate_hz=self._sample_rate_hz)
-        except Exception as exc:  # noqa: BLE001
-            self.get_logger().error(f"direct open/start failed: {exc}")
-            self._streaming = False
-            return
-        self.get_logger().info("stream started (direct)")
-        while self._streaming and rclpy.ok():
-            try:
-                wrench = self._sensor.read_wrench(timeout=0.05)
-            except Exception as exc:  # noqa: BLE001
-                self.get_logger().error(f"direct read failed: {exc}")
-                break
-            if wrench is None:
-                continue
-            self._frames_seen += 1
-            if self._use_si:
-                wrench = wrench.to_si()
-            if self._tare_pending:
-                self._offsets = [wrench.fx, wrench.fy, wrench.fz,
-                                 wrench.mx, wrench.my, wrench.mz]
-                self._tare_pending = False
-                self.get_logger().info(
-                    f"tare baseline set: Fx={wrench.fx:+.3f} Fy={wrench.fy:+.3f} "
-                    f"Fz={wrench.fz:+.3f}")
-            if self._min_period > 0.0:
-                now = time.monotonic()
-                if (now - self._last_pub) < self._min_period:
-                    continue
-                self._last_pub = now
-            self._publish(wrench)
-
-    def _start_sequence(self, tare: bool) -> None:
+    def _start_sequence(self, tare: bool, cancel: threading.Event) -> None:
         """按驱动时序起流：停止 -> 设采样率 -> 实时命令（未起流则重发）。"""
         self._streaming = False
+        if cancel.is_set():
+            return
         self._send_cmd(self._cmd_id, protocol.build_stop_command())
-        time.sleep(_CMD_SETTLE_S)
+        if cancel.wait(_CMD_SETTLE_S):
+            return
         self._assembler.reset()
         self._send_cmd(self._cmd_id, protocol.build_sample_rate_command(self._sample_rate_hz))
-        time.sleep(_CMD_SETTLE_S)
+        if cancel.wait(_CMD_SETTLE_S):
+            return
         for _ in range(3):
+            if cancel.is_set():
+                self._streaming = False
+                return
             self._frames_seen = 0
             self._streaming = True   # 允许 rx 回调计数/发布
             self._send_cmd(self._cmd_id, protocol.build_realtime_command(self._period_ms))
             deadline = time.monotonic() + 0.3
             while time.monotonic() < deadline:
+                if cancel.is_set():
+                    self._streaming = False
+                    return
                 if self._frames_seen >= 3:
                     if tare:
                         self._tare_pending = True
                     self.get_logger().info("stream started")
                     return
-                time.sleep(0.02)
+                if cancel.wait(0.02):
+                    self._streaming = False
+                    return
         if tare:
             self._tare_pending = True
         self.get_logger().warn("stream start not confirmed (no frames); is the bridge up?")
 
+    def _cancel_start_sequence(self) -> None:
+        with self._start_lock:
+            cancel = self._start_cancel
+            thread = self._start_thread
+            if cancel is not None:
+                cancel.set()
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+            if thread.is_alive():
+                self.get_logger().warn("stream start thread did not stop within 1 second")
+
     def _do_stop(self) -> None:
         self._streaming = False
-        if self._direct:
-            th = self._direct_thread
-            if th is not None and th.is_alive() and th is not threading.current_thread():
-                th.join(timeout=1.0)
-            try:
-                if self._sensor is not None:
-                    self._sensor.stop_stream()
-            except Exception:  # noqa: BLE001
-                pass
-            self.get_logger().info("stream stopped (direct)")
-            return
+        self._cancel_start_sequence()
         self._send_cmd(self._cmd_id, protocol.build_stop_command())
         self.get_logger().info("stream stopped")
 
@@ -320,10 +259,13 @@ class KWR57DeviceNode(Node):
 
     # --- data path (rx callback) -----------------------------------------
     def _on_frame(self, frame: Frame) -> None:
-        if frame.id not in self._data_ids:
+        can_id = int(frame.id)
+        if can_id not in self._data_ids:
+            return
+        if frame.is_extended or frame.is_rtr or frame.is_error or int(frame.dlc) != 8:
             return
         self._frames_seen += 1
-        wrench = self._assembler.push(int(frame.id), bytes(bytearray(frame.data)))
+        wrench = self._assembler.push(can_id, bytes(frame.data))
         if wrench is None:
             return
         if self._use_si:
@@ -356,17 +298,7 @@ class KWR57DeviceNode(Node):
 
     def destroy_node(self) -> bool:
         self._streaming = False
-        if self._direct:
-            th = self._direct_thread
-            if th is not None and th.is_alive() and th is not threading.current_thread():
-                th.join(timeout=1.0)
-            try:
-                if self._sensor is not None:
-                    self._sensor.stop_stream()
-                    self._sensor.close()
-            except Exception:  # noqa: BLE001
-                pass
-            return super().destroy_node()
+        self._cancel_start_sequence()
         try:
             self._send_cmd(self._cmd_id, protocol.build_stop_command())
         except Exception:  # noqa: BLE001
@@ -385,7 +317,8 @@ def main() -> None:
             rclpy.shutdown()
         return
 
-    executor = MultiThreadedExecutor()
+    # 单个高频订阅使用线程池只会增加 CPython 的 GIL 竞争与任务调度开销。
+    executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()

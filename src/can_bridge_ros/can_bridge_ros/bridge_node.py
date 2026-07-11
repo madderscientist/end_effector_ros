@@ -1,6 +1,8 @@
-"""ROS 2 CAN Bus Bridge：python-can 总线 <-> can_msgs/Frame（支持多通道）。
+"""ROS 2 CAN Bus Bridge：python-can 总线 <-> can_msgs/Frame（支持多通道和 ID 路由）。
 
 一个 bridge 进程独占一个物理 USB-CAN 设备，可同时桥接该设备的多条 CAN 通道。
+接收帧默认发布到对应 ``/canX/rx``；通过启动参数配置 ``rx_routes`` 后，命中的帧改发
+一个或多个设备专属话题，避免高频设备帧唤醒同总线上的所有 ROS 节点。
 底层总线创建和适配器准备由无 ROS 的 ``can_sdk`` 统一提供；本模块只负责 ROS 参数、
 消息转换、收发调度和话题分发。
 """
@@ -20,6 +22,8 @@ from can_sdk import open_bus
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
+from can_bridge_ros.routing import parse_rx_routes
+
 
 class CanBridgeNode(Node):
     def __init__(self) -> None:
@@ -30,8 +34,9 @@ class CanBridgeNode(Node):
         self.declare_parameter("bitrate", 1_000_000)
         self.declare_parameter("channel_ids", [0])
         self.declare_parameter("bus_names", ["can0"])
-        self.declare_parameter("rx_queue_depth", 1000)
+        self.declare_parameter("rx_queue_depth", 128)
         self.declare_parameter("receive_own_messages", False)
+        self.declare_parameter("rx_routes", [""])
 
         get_parameter = self.get_parameter
         interface = str(get_parameter("interface").value)
@@ -43,8 +48,10 @@ class CanBridgeNode(Node):
                      (get_parameter("bus_names").value or ["can0"])]
         rx_depth = int(get_parameter("rx_queue_depth").value)
         receive_own = bool(get_parameter("receive_own_messages").value)
+        rx_route_specs = list(get_parameter("rx_routes").value or [])
         if len(channel_ids) != len(bus_names):
             raise ValueError("channel_ids 与 bus_names 长度必须一致")
+        rx_routes = parse_rx_routes(rx_route_specs, channel_ids)
 
         try:
             self._bus = open_bus(
@@ -70,6 +77,7 @@ class CanBridgeNode(Node):
         )
 
         self._rx_pub: Dict[int, object] = {}
+        self._routed_rx_pub: Dict[Tuple[int, int], Tuple[object, ...]] = {}
         self._single = len(channel_ids) == 1
         self._only_cid = channel_ids[0] if self._single else None
         self._subs = []
@@ -86,7 +94,23 @@ class CanBridgeNode(Node):
                 f"bridge channel {channel_id} <-> /{bus_name}/rx "
                 "(BEST_EFFORT), /{bus_name}/tx (RELIABLE)")
 
+        publishers_by_topic: Dict[str, object] = {}
+        for route_key, route_topics in rx_routes.items():
+            route_publishers = []
+            for route_topic in route_topics:
+                publisher = publishers_by_topic.get(route_topic)
+                if publisher is None:
+                    publisher = self.create_publisher(Frame, route_topic, rx_qos)
+                    publishers_by_topic[route_topic] = publisher
+                route_publishers.append(publisher)
+                channel_id, can_id = route_key
+                self.get_logger().info(
+                    f"RX route channel {channel_id}, CAN ID 0x{can_id:X} -> "
+                    f"{route_topic}")
+            self._routed_rx_pub[route_key] = tuple(route_publishers)
+
         self._tx_queue: "queue.Queue[Tuple[int, Frame]]" = queue.Queue(maxsize=2000)
+        self._tx_pending = threading.Event()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._bus_loop, daemon=True)
         self._thread.start()
@@ -98,6 +122,7 @@ class CanBridgeNode(Node):
         def _callback(frame: Frame) -> None:
             try:
                 self._tx_queue.put_nowait((channel_id, frame))
+                self._tx_pending.set()
             except queue.Full:
                 self.get_logger().warn(
                     f"tx queue full (ch {channel_id}), dropping frame")
@@ -105,23 +130,25 @@ class CanBridgeNode(Node):
 
     def _bus_loop(self) -> None:
         while not self._stop.is_set():
-            while True:
-                try:
-                    channel_id, frame = self._tx_queue.get_nowait()
-                except queue.Empty:
-                    break
-                try:
-                    self._bus.send(can.Message(
-                        arbitration_id=int(frame.id),
-                        is_extended_id=bool(frame.is_extended),
-                        is_remote_frame=bool(frame.is_rtr),
-                        dlc=int(frame.dlc),
-                        data=bytes(bytearray(frame.data))[:int(frame.dlc)],
-                        channel=channel_id,
-                    ))
-                except Exception as exc:  # noqa: BLE001
-                    self.get_logger().error(
-                        f"CAN send failed (ch {channel_id}): {exc}")
+            if self._tx_pending.is_set():
+                self._tx_pending.clear()
+                while True:
+                    try:
+                        channel_id, frame = self._tx_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    try:
+                        self._bus.send(can.Message(
+                            arbitration_id=int(frame.id),
+                            is_extended_id=bool(frame.is_extended),
+                            is_remote_frame=bool(frame.is_rtr),
+                            dlc=int(frame.dlc),
+                            data=bytes(frame.data)[:int(frame.dlc)],
+                            channel=channel_id,
+                        ))
+                    except Exception as exc:  # noqa: BLE001
+                        self.get_logger().error(
+                            f"CAN send failed (ch {channel_id}): {exc}")
 
             try:
                 message = self._bus.recv(timeout=0.005)
@@ -137,24 +164,41 @@ class CanBridgeNode(Node):
 
     def _publish(self, message) -> None:
         if self._single:
-            publisher = self._rx_pub[self._only_cid]
+            channel_id = self._only_cid
         else:
-            publisher = self._rx_pub.get(getattr(message, "channel", None))
-            if publisher is None:
+            raw_channel = getattr(message, "channel", None)
+            try:
+                channel_id = int(raw_channel)
+            except (TypeError, ValueError):
                 return
+
+        can_id = int(message.arbitration_id)
+        is_data_frame = not (
+            bool(message.is_extended_id)
+            or bool(message.is_remote_frame)
+            or bool(getattr(message, "is_error_frame", False))
+        )
+        publishers = (self._routed_rx_pub.get((channel_id, can_id))
+                      if is_data_frame else None)
+        if publishers is None:
+            default_publisher = self._rx_pub.get(channel_id)
+            if default_publisher is None:
+                return
+            publishers = (default_publisher,)
 
         frame = Frame()
         frame.header.stamp = self.get_clock().now().to_msg()
-        frame.id = int(message.arbitration_id)
+        frame.id = can_id
         frame.is_extended = bool(message.is_extended_id)
         frame.is_rtr = bool(message.is_remote_frame)
         frame.is_error = bool(getattr(message, "is_error_frame", False))
         frame.dlc = int(message.dlc)
-        frame.data = list(bytes(bytearray(message.data)[:8]).ljust(8, b"\x00"))
-        try:
-            publisher.publish(frame)
-        except Exception:  # noqa: BLE001 - ROS 正在关闭
-            pass
+        frame.data = list(bytes(message.data)[:8].ljust(8, b"\x00"))
+        for publisher in publishers:
+            try:
+                publisher.publish(frame)
+            except Exception:  # noqa: BLE001 - ROS 正在关闭
+                pass
 
     def destroy_node(self) -> bool:
         self._stop.set()

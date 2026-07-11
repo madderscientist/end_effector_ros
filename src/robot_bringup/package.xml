@@ -8,10 +8,14 @@
   <maintainer email="liruigang20131115@126.com">madderscientist</maintainer>
   <license>MIT</license>
 
+  <buildtool_depend>ament_python</buildtool_depend>
+
   <exec_depend>can_bridge_ros</exec_depend>
   <exec_depend>kwr57_ros</exec_depend>
   <exec_depend>gloria_ros</exec_depend>
   <exec_depend>ros2launch</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

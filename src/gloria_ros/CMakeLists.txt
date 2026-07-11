@@ -31,5 +31,10 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_can_feedback test/test_can_feedback.py)
+endif()
+
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

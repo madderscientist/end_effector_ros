@@ -107,6 +107,11 @@ flowchart LR
 
 官网协议说明反馈帧 ID 由 `Master ID` 设置且默认值为 0；当前 SDK 和 ROS 则默认使用 `feedback_id=0x101`。因此 `feedback_id` 必须按实机读取值配置，不能只依赖默认值。
 当前 ROS 节点兼容反馈 CAN ID 为 `feedback_id`、`command_id` 或 `0x000` 的固件。
+多设备 `robot_bringup` 要求每台夹爪使用非零专属 `feedback_id`，因为寄存器回包没有
+payload 设备号，无法在共享 CAN ID `0x000` 上安全区分来源。`command_id` 低 4 位设备号
+必须非零且在同通道唯一；值 `0` 为共享状态反馈保留。
+节点按 SDK 定义的完整回包特征识别寄存器帧：`Data[0:2]` 为保留零字节且
+`Data[2]` 为 `0x33/0x55`。MIT 状态帧中的位置字节即使偶然等于该操作码，也不会被误判。
 
 多夹爪共总线时，应检查每台设备的完整活动 ID 集合，而不只是 `command_id`。例如：
 
@@ -213,7 +218,11 @@ Data[4:8] = v_des，IEEE-754 float32，小端序，单位 rad/s
 | `0xD` | 通信丢失 |
 | `0xE` | 过载 |
 
-**当前软件限制**：SDK 的 `unpack_mit_feedback()` 和 `gloria_ros` 目前只输出位置、速度和力矩，没有发布 `ERR`、`T_MOS` 或 `T_Rotor`。ROS `/diagnostics` 中的 `enabled_requested` 是主机侧状态，不是设备 `ERR=1` 的确认。官网将状态放在 Data[0] 高 4 位，而当前 ROS 节点对非零反馈 CAN ID 使用完整 Data[0] 匹配设备 ID，所以故障状态帧的兼容性还需实机验证。生产系统不能仅凭当前 `/diagnostics` 判定硬件无故障，应增加状态码和温度解析或使用厂家工具监控。
+**当前软件限制**：`gloria_ros` 已按 Data[0] 低 4 位识别设备，因此高 4 位的使能或故障
+状态不会再导致整帧被丢弃；但 SDK 的 `unpack_mit_feedback()` 和 ROS 节点目前仍只输出位置、
+速度和力矩，没有发布 `ERR`、`T_MOS` 或 `T_Rotor`。ROS `/diagnostics` 中的
+`enabled_requested` 是主机侧请求状态，不是设备 `ERR=1` 的确认。生产系统不能仅凭当前
+`/diagnostics` 判定硬件无故障，应增加状态码和温度解析或使用厂家工具监控。
 
 ### 5.5 定点映射与量化
 SDK 对位置、速度和力矩使用相同的线性映射。对范围 `[x_min, x_max]` 和 `n` 位整数：

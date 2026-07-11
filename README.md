@@ -1,8 +1,9 @@
 # end_effector_ros
 
 末端执行器（力传感器 + 夹爪）的 ROS 2 集成工作区，采用 **"CAN 总线作为共享资源"** 的分层架构：
-一个通用 `can_bridge_ros` 独占物理 CAN 总线，各设备只是 **订阅总线帧、按 CAN ID 过滤** 的独立
-设备节点。**一设备一节点**，同一条总线可挂多个同构/异构设备；换接线只换启动配置，驱动不改。
+一个通用 `can_bridge_ros` 独占物理 CAN 总线，各设备是独立 ROS 节点。bridge 可按 CAN ID 把高频帧分流到设备专属 RX 话题，未路由帧走默认 `/canX/rx`。**一设备一节点**，同一条
+总线可挂多个同构/异构设备；路由由 `robot_bringup` 在启动时根据完整设备清单生成，
+换接线只换启动配置，驱动和物理总线 YAML 不改。
 
 设备：2 个力传感器（KWR57）+ 2 个夹爪（Gloria-M）。支持两种接线：
 - **单总线**：所有设备都在 CANalyst-II 的统一 CAN 上（`/can0` 或者 `/can1`）。
@@ -10,9 +11,9 @@
 
 ```
 第1层 can_sdk        : 无 ROS 的 python-can 后端、CANalyst-II 准备和单消费者基础 I/O
-第2层 can_bridge_ros : 独占一个 USB-CAN 设备、可同时桥接多通道；发布 /canX/rx，订阅 /canX/tx
-第3层 设备节点    : kwr57_ros / gloria_ros，各订阅 /canX/rx 过滤自己的 ID
-第4层 bringup    : robot_bringup 用 launch/config 描述单/双总线接线
+第2层 can_bridge_ros : 独占一个 USB-CAN 设备、桥接多通道并按可选 CAN ID 路由 RX
+第3层 设备节点    : kwr57_ros / gloria_ros 各自订阅 bringup 分配的专属 RX
+第4层 bringup    : robot_bringup 用一份设备清单生成 bridge 路由和设备节点参数
 ```
 
 消息契约使用上游 ROS 2 [`can_msgs`](https://index.ros.org/p/can_msgs/) 包提供的
@@ -39,7 +40,7 @@ end_effector_ros/                 一个 colcon workspace
     ├── Gloria-M-SDK/             git submodule（云犀夹爪 SDK）
     ├── gloria_ros/               夹爪 ROS 设备节点 + MIT/PV 消息（复用 Gloria SDK 协议）
     |
-    └── robot_bringup/            单/双总线 launch + config
+    └── robot_bringup/            单/双总线 launch + 声明式设备拓扑
 ```
 
 - SDK 保留：`CAN-SDK`（模块 `can_sdk`）、`KWR57-SDK`（模块 `kwr57_sensor`）和 `gloria_m_sdk` 均可脱离 ROS 使用；ROS 封装只复用基础 I/O 和设备协议，不重复实现。
@@ -97,11 +98,15 @@ ros2 launch robot_bringup single_bus.launch.py
 ros2 launch robot_bringup dual_bus.launch.py
 ```
 
-- 单总线下同一条总线各设备 **CAN ID 必须不同**（力传感器用 `src/KWR57-SDK/examples/set_id.py` 改）。
+- 单总线下各设备的非共享活动 CAN ID 必须互不冲突；Gloria-M 状态兼容 ID `0x000` 可按
+    协议共享，但各夹爪 `command_id` 的低 4 位设备号必须不同。
 - 双总线下两臂在不同总线，**CAN ID 可相同**，无需改。
 - 换接线**只改用哪个 launch**，设备节点代码不动。
-- 两个 1 kHz KWR57 会产生约 6000 CAN 数据帧/秒；生产环境优先使用双总线，单总线时建议
-    降低 KWR57 上传频率并监控丢帧。
+- 自定义设备 ID、总线或专属 RX 话题时，只修改对应 bringup launch 中的
+    `CanBus`/`Kwr57Device`/`GloriaDevice` 清单；bridge 路由和设备节点参数会从同一份数据生成。
+- 两个 1 kHz KWR57 会产生 6000 个 8-byte 标准 CAN 数据帧/秒。在 1 Mbps 下，无位填充
+    时约占 666 kbit/s，按最坏位填充估算约 810 kbit/s；两个低频 Gloria-M 可以共存，但
+    余量有限，必须保证终端匹配并在实机监控丢帧和实际发布频率。
 
 话题：`/ft_left/wrench_raw`、`/grip_left/joint_states` 等。BEST_EFFORT，`ros2 topic echo` 加
 `--qos-reliability best_effort` 或用 `ros2 run kwr57_ros wrench_echo`。
@@ -110,6 +115,7 @@ Gloria 节点默认不自动使能。其 `~/enable` 服务会先设置并确认 
 等待状态反馈；未使能、模式未确认或反馈过期时默认拒绝运动命令。完整接口与安全参数见
 `src/gloria_ros/README.md`。
 
-各包细节见各自 README：`src/CAN-SDK/README.md`、`src/can_bridge_ros/README.md`、`src/kwr57_ros/README.md`。
+各包细节见各自 README：`src/CAN-SDK/README.md`、`src/can_bridge_ros/README.md`、
+`src/kwr57_ros/README.md`、`src/robot_bringup/README.md`。
 
 [ros2_socketcan]: https://github.com/autowarefoundation/ros2_socketcan

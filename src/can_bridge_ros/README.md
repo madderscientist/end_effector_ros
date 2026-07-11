@@ -1,6 +1,8 @@
 # can_bridge_ros
 
-通用 ROS 2 CAN 总线桥接：一个节点独占一个物理 USB-CAN 设备，将收到的全部帧发布为 `can_msgs/msg/Frame`，并订阅命令帧下发。支持 CANalyst-II 单设备多通道。
+通用 ROS 2 CAN 总线桥接：一个节点独占一个物理 USB-CAN 设备，将收到的帧发布为
+`can_msgs/msg/Frame`，并订阅命令帧下发。支持 CANalyst-II 单设备多通道，以及按
+`channel + CAN ID` 将高频帧分流到设备专属 RX 话题。
 
 本包只负责 ROS 参数、消息转换、线程调度和话题分发；无 ROS 的总线创建、CANalyst-II `libusb` 准备及权限检查统一由 [`CAN-SDK`](../CAN-SDK/README.md) 提供。
 
@@ -24,15 +26,15 @@ sudo apt-get install -y ros-foxy-can-msgs
 
 ```text
 第1层 can_sdk        : python-can 后端与基础 I/O（无 ROS、无设备协议）
-第2层 can_bridge_ros : 独占物理总线，发布 /canX/rx，订阅 /canX/tx
-第3层设备节点        : 订阅 /canX/rx 并按自身 CAN ID 过滤
+第2层 can_bridge_ros : 独占物理总线，按可选 ID 路由发布 RX，订阅 /canX/tx
+第3层设备节点        : 订阅默认 /canX/rx 或自己的专属 RX 话题
 ```
 
 ## 话题与参数
 
 | 方向 | 话题 | 类型 | QoS |
 |---|---|---|---|
-| 发布 | `/<bus_name>/rx` | `can_msgs/Frame` | BEST_EFFORT, KEEP_LAST(depth) |
+| 发布 | `/<bus_name>/rx` 或路由目标 | `can_msgs/Frame` | BEST_EFFORT, KEEP_LAST(depth) |
 | 订阅 | `/<bus_name>/tx` | `can_msgs/Frame` | RELIABLE, KEEP_LAST |
 
 | 参数 | 默认 | 说明 |
@@ -42,8 +44,37 @@ sudo apt-get install -y ros-foxy-can-msgs
 | `bitrate` | `1000000` | 比特率 |
 | `channel_ids` | `[0]` | `Message.channel` 值 |
 | `bus_names` | `["can0"]` | 对应 ROS 总线名 |
-| `rx_queue_depth` | `1000` | 接收发布队列深度 |
+| `rx_queue_depth` | `128` | 接收发布队列深度；约 40 ms 的单 KWR57 帧窗口 |
 | `receive_own_messages` | `false` | 是否回显发送帧 |
+| `rx_routes` | `[""]` | `channel:can_id:topic` 字符串数组；支持十进制或 `0x` ID |
+
+`rx_routes` 是 bridge 的**启动参数**。节点启动时解析并建立路由表，运行期间不动态修改。
+命中时采用**转发而非镜像**：该帧只发布到专属话题，不再发布到
+`/<bus_name>/rx`。未命中的帧仍走默认 RX，因此 KWR57 高频流可以和 Gloria-M 等低频设备隔离。例如：
+
+```yaml
+rx_routes:
+  - "0:0x15:/can0/ft_left/rx"
+  - "0:0x16:/can0/ft_left/rx"
+  - "0:0x17:/can0/ft_left/rx"
+```
+
+路由中的通道必须出现在 `channel_ids` 中。同一通道的同一 CAN ID 可以配置多个**不同**
+目标话题，bridge 会按顺序扇出；完全相同的重复规则会被拒绝。例如 Gloria-M 的共享
+反馈 ID `0x000` 可以同时路由到两台夹爪：
+
+```yaml
+rx_routes:
+  - "0:0x0:/can0/grip_left/rx"
+  - "0:0x0:/can0/grip_right/rx"
+```
+
+仓库自带的 `config/single_bus.yaml` 和 `config/dual_bus.yaml` 只描述适配器、通道、
+波特率和队列等**物理总线默认值**，不包含具体设备路由。完整机器人启动时，
+`robot_bringup` 根据当次 launch 中的 `Kwr57Device` 和 `GloriaDevice` 清单生成
+`rx_routes`，并以 ROS 参数
+覆盖传给 bridge。参数只在启动时解析一次，运行中的路由仍是字典查询；仅当一个 ID 配置
+多个目标时，才会产生协议所需的额外发布。
 
 ## 启动
 
@@ -52,6 +83,9 @@ source ~/end_effector_ros/scripts/env.sh
 ros2 launch can_bridge_ros can_bridge_ros.launch.py config:=single_bus.yaml
 ros2 launch can_bridge_ros can_bridge_ros.launch.py config:=dual_bus.yaml
 ```
+
+单独运行上述 bridge 时没有专属路由，所有普通接收帧都发布到默认 `/canX/rx`；这是通用
+调试模式。生产部署使用 `robot_bringup`，不要在物理 YAML 中写死设备名称和 CAN ID。
 
 CANalyst-II 是一个 USB 设备。双通道必须用同一进程通过 `channel="0,1"` 打开，两个独立 Bus 可能产生 `Resource busy`。
 
@@ -64,7 +98,7 @@ sudo udevadm trigger
 ```
 
 ## 设备节点约定
-- 订阅 `/<bus_name>/rx`（BEST_EFFORT），按 `frame.id` 过滤。
+- 高频设备优先订阅 bringup 通过 `rx_routes` 分配的专属话题；其他设备订阅 `/<bus_name>/rx`。
 - 发布命令到 `/<bus_name>/tx`（RELIABLE）。
 - `can_msgs/Frame.data` 是定长 8 字节整数列表，`dlc` 表示有效长度。
-- 不允许设备节点再次直接打开同一物理 CAN；直连模式仅用于 bridge 未运行时的台架调试。
+- ROS 设备节点不直接打开物理 CAN；需要台架直连时，只能停止 bridge 后使用独立 SDK 工具。

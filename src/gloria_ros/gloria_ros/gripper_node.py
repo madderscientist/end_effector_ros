@@ -25,6 +25,12 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64
 from std_srvs.srv import Trigger
 
+from gloria_ros.can_feedback import (
+    is_register_reply,
+    register_reply_belongs_to_device,
+    state_feedback_belongs_to_device,
+)
+
 try:
     from gloria_m_sdk.protocol_mit import pack_mit_command, unpack_mit_feedback
     from gloria_m_sdk.types import Limits
@@ -590,14 +596,6 @@ class GloriaGripperNode(Node):
                 self._operation_lock.release()
 
     # --- 反馈 -----------------------------------------------------------
-    def _can_id_belongs_to_device(self, can_id: int) -> bool:
-        return can_id in (self._feedback_id, self._command_id, 0x00)
-
-    def _state_feedback_belongs_to_device(self, can_id: int, data: bytes) -> bool:
-        if can_id == 0x00:
-            return (data[0] & 0x0F) == (self._command_id & 0x0F)
-        return data[0] == (self._command_id & 0xFF)
-
     def _on_frame(self, frame: Frame) -> None:
         if frame.is_error or frame.is_rtr or frame.is_extended:
             return
@@ -605,20 +603,21 @@ class GloriaGripperNode(Node):
             return
         data = bytes(bytearray(frame.data))[:8]
         can_id = int(frame.id)
-        if not self._can_id_belongs_to_device(can_id):
-            return
 
         with self._lock:
             mode_pending = self._mode_request_pending
             parameter_pending = self._pending_parameter_id
+        register_reply = is_register_reply(data)
         is_mode_reply = (
-            mode_pending and data[2] in (0x33, 0x55)
+            register_reply and mode_pending
             and int(data[3]) == _RID_CTRL_MODE)
         is_parameter_reply = (
-            parameter_pending is not None and data[2] in (0x33, 0x55)
+            register_reply and parameter_pending is not None
             and int(data[3]) == parameter_pending)
         if is_mode_reply or is_parameter_reply:
-            register_id = int(data[3])
+            if not register_reply_belongs_to_device(
+                    can_id, self._command_id, self._feedback_id):
+                return
             if is_mode_reply:
                 value = struct.unpack("<I", data[4:8])[0]
                 with self._lock:
@@ -630,8 +629,11 @@ class GloriaGripperNode(Node):
                     self._last_parameter_value = float(value)
                 self._parameter_event.set()
             return
+        if register_reply:
+            return
 
-        if not self._state_feedback_belongs_to_device(can_id, data):
+        if not state_feedback_belongs_to_device(
+                can_id, data, self._command_id, self._feedback_id):
             return
 
         try:
