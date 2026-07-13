@@ -1,8 +1,8 @@
 """ROS 2 KWR57 device node (bridge mode)
 
 一设备一节点：本节点**不直接开总线**，而是通过 ``can_bridge_ros`` 共享总线：
-    - 订阅 ``rx_topic``（``can_msgs/Frame``，BEST_EFFORT）。高频部署由 bridge 按 CAN ID
-        路由到设备专属话题；未配置路由时，本节点仍会自行过滤总线帧；
+    - 订阅 ``rx_topic``（``can_msgs/Frame``，BEST_EFFORT）。
+        高频部署由 bridge 按 CAN ID 路由到设备专属话题；未配置路由时，本节点仍会自行过滤总线帧；
     - 用 ``kwr57_sensor`` 的协议层组包，发布 ``geometry_msgs/WrenchStamped``；
   - 下发命令（起流/停止/采样率）时，把 ``can_msgs/Frame`` 发布到 ``tx_topic``（RELIABLE）。
 
@@ -21,7 +21,7 @@ services:   ~/start ~/stop ~/tare ~/reset_tare  std_srvs/Trigger
 
 Parameters
 ----------
-    rx_topic        string  default "/can0/rx"     bridge RX；bringup 会改为专属话题
+  rx_topic        string  default "/can0/rx"     bridge RX；bringup 会改为专属话题
   tx_topic        string  default "/can0/tx"     bridge 订阅的命令帧话题
   cmd_id          int     default 0x10           本设备命令(接收)CAN ID
   data_base_id    int     default 0x15           本设备数据起始 CAN ID (帧 base/+1/+2)
