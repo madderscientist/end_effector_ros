@@ -7,9 +7,9 @@
 _EE_WS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export END_EFFECTOR_ROS_ROOT="$_EE_WS"
 
-# 纯 Python SDK 保持独立，不交给 colcon 构建。ROS 节点直接从源码目录导入；
+# 根目录 sdk 下的纯 Python SDK 保持独立，不交给 colcon 构建。ROS 节点直接从源码目录导入；
 # 用户若已用 pip 安装 SDK，该设置仍确保当前工作区源码优先，便于联调。
-_EE_SDK_PYTHONPATH="$_EE_WS/src/CAN-SDK:$_EE_WS/src/KWR57-SDK:$_EE_WS/src/Gloria-M-SDK/src"
+_EE_SDK_PYTHONPATH="$_EE_WS/sdk/CAN-SDK:$_EE_WS/sdk/KWR57-SDK:$_EE_WS/sdk/Gloria-M-SDK/src"
 export PYTHONPATH="$_EE_SDK_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}"
 
 source /opt/ros/foxy/setup.bash

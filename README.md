@@ -26,16 +26,14 @@ end_effector_ros/                 一个 colcon workspace
 ├── .gitignore
 ├── .gitmodules
 ├── scripts/                      env.sh（环境）/ run.sh（一键单/双总线，含清理）
-└── src/
-    ├── CAN-SDK/                  通用 CAN 基础库（无 ROS、无设备协议）
+├── sdk/                          纯 Python SDK（不参与 colcon 构建）
+|   ├── CAN-SDK/                  通用 CAN 基础库（无 ROS、无设备协议）
+|   ├── KWR57-SDK/                力传感器 SDK（纯Python，pip 安装；非ROS可用）
+|   └── Gloria-M-SDK/             git submodule（云犀夹爪 SDK）
+└── src/                          colcon 扫描的 ROS 2 包
     ├── can_bridge_ros/           通用 ROS 2 CAN bridge（多通道）
-    |
-    ├── KWR57-SDK/                力传感器 SDK（纯Python，pip 安装；非ROS可用）
     ├── kwr57_ros/                力传感器 ROS 设备节点（import kwr57_sensor）
-    |
-    ├── Gloria-M-SDK/             git submodule（云犀夹爪 SDK）
     ├── gloria_ros/               夹爪 ROS 设备节点 + MIT/PV 消息（复用 Gloria SDK 协议）
-    |
     └── robot_bringup/            单/双总线 launch + 声明式设备拓扑
 ```
 
@@ -59,10 +57,9 @@ python3 -m pip install --user 'python-can>=4.0' canalystii 'libusb-package>=1.0.
 git clone --recurse-submodules <本仓库URL> ~/end_effector_ros
 # 已克隆则： git submodule update --init --recursive
 
-# CAN-SDK 与 KWR57-SDK 带 COLCON_IGNORE；Gloria-M-SDK 是外部 submodule，
-# 不修改其内容并在构建时排除。colcon 只构建 ROS 包。
+# SDK 位于根目录 sdk/，不在 colcon 默认扫描的 src/ 下；只构建 ROS 包。
 cd ~/end_effector_ros
-colcon build --symlink-install --packages-ignore Gloria-M-SDK
+colcon build --symlink-install
 source scripts/env.sh
 ```
 
@@ -72,8 +69,8 @@ CANalyst-II 需 udev 权限（VID:PID 04d8:0053），见 `src/can_bridge_ros/REA
 `PYTHONPATH`，随后加载 ROS 和工作区环境。若要在仓库外独立使用 SDK，可选择安装：
 
 ```bash
-python3 -m pip install -e './src/CAN-SDK[canalystii]'
-python3 -m pip install -e ./src/KWR57-SDK
+python3 -m pip install -e './sdk/CAN-SDK[canalystii]'
+python3 -m pip install -e ./sdk/KWR57-SDK
 ```
 
 
@@ -103,5 +100,5 @@ ros2 launch robot_bringup dual_bus.launch.py
 
 Gloria 节点默认不自动使能。其 `~/enable` 服务会先设置并确认 MIT/PV 控制模式，再使能并等待状态反馈；未使能、模式未确认或反馈过期时默认拒绝运动命令。完整接口与安全参数见 `src/gloria_ros/README.md`。
 
-各包细节见各自 README：`src/CAN-SDK/README.md`、`src/can_bridge_ros/README.md`、
+各包细节见各自 README：`sdk/CAN-SDK/README.md`、`src/can_bridge_ros/README.md`、
 `src/kwr57_ros/README.md`、`src/robot_bringup/README.md`。

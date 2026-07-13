@@ -5,7 +5,7 @@
 - [官方安装与使用指南](https://docs.sparklingrobo.com/docs/gloria-m-series/doc_01_installation_guide)
 - [官方通信协议](https://docs.sparklingrobo.com/docs/gloria-m-series/protocol/doc_00_intro)
 - [官方 Python SDK 文档](https://docs.sparklingrobo.com/docs/gloria-m-series/doc_02_sdk_communication)
-- [`Gloria-M-SDK`](../Gloria-M-SDK/README.zh-CN.md) 源码
+- [`Gloria-M-SDK`](../../sdk/Gloria-M-SDK/README.zh-CN.md) 源码
 - 本仓库 [`gloria_ros`](README.md) 与 [`can_bridge_ros`](../can_bridge_ros/README.md)
 
 整理日期：2026-07-11
@@ -285,7 +285,7 @@ SDK 默认 `PMAX=3.14`、`VMAX=10`、`TMAX=12` 时，理论量化步长约为：
 | 35 | `can_br` | uint32 | CAN 比特率配置枚举，映射未在 SDK 中公开 |
 
 完整枚举见
-[`registers.py`](../Gloria-M-SDK/src/gloria_m_sdk/registers.py)。`Deta`、`V_BW`、`IQ_c1`、`VL_c1`、校准偏置和 `p_m/xout` 等条目的完整语义未在当前公开资料中定义，不建议在不了解固件版本的情况下写入。
+[`registers.py`](../../sdk/Gloria-M-SDK/src/gloria_m_sdk/registers.py)。`Deta`、`V_BW`、`IQ_c1`、`VL_c1`、校准偏置和 `p_m/xout` 等条目的完整语义未在当前公开资料中定义，不建议在不了解固件版本的情况下写入。
 
 ### 6.2 控制模式值
 

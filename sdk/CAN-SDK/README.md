@@ -8,7 +8,7 @@
 
 本包刻意**不提供多订阅或帧广播**。`recv()` 会消费底层队列中的下一帧；需要多设备或多进程共享物理 CAN 时，应让 `can_bridge_ros` 等上层总线管理器成为唯一接收者并分发帧。
 
-本目录是普通 Python 包，使用 `COLCON_IGNORE` 明确排除在 ROS/colcon 构建之外。
+本目录是普通 Python 包，位于工作区根目录的 `sdk/`，不在 ROS/colcon 默认扫描的 `src/` 下。
 工作区内的 ROS2 节点通过 [`scripts/env.sh`](../../scripts/env.sh) 设置的 `PYTHONPATH` 直接导入源码；安装仅用于仓库外调用、虚拟环境或发布场景。
 
 ## 安装
@@ -16,12 +16,12 @@
 
 普通 `python-can` 后端：
 ```bash
-python -m pip install -e ./src/CAN-SDK
+python -m pip install -e ./sdk/CAN-SDK
 ```
 
 CANalyst-II：
 ```bash
-python -m pip install -e './src/CAN-SDK[canalystii]'
+python -m pip install -e './sdk/CAN-SDK[canalystii]'
 ```
 
 `python-can` 会自动支持大多数 USB-CAN 模块。个别适配器需额外驱动/后端：
@@ -64,7 +64,7 @@ Get-PnpDevice -PresentOnly |
 建议在虚拟环境中安装 CANalyst-II 可选依赖：
 
 ```powershell
-python -m pip install -e ".\src\CAN-SDK[canalystii]"
+python -m pip install -e ".\sdk\CAN-SDK[canalystii]"
 ```
 
 该 extra 包含：
@@ -95,7 +95,7 @@ CHANNEL = "0"  # CAN1；CAN2 使用 "1"
 ```bash
 sudo apt update
 sudo apt install -y python3-pip libusb-1.0-0
-python3 -m pip install -e './src/CAN-SDK[canalystii]'
+python3 -m pip install -e './sdk/CAN-SDK[canalystii]'
 ```
 
 #### 配置 USB 权限

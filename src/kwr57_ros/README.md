@@ -52,8 +52,8 @@ sudo apt-get install -y ros-foxy-can-msgs
 source /opt/ros/foxy/setup.bash
 python3 -m pip install --user 'python-can>=4.0' canalystii 'libusb-package>=1.0.30'
 
-# 2.3 纯 Python SDK 带 COLCON_IGNORE；外部 Gloria-M-SDK 单独排除
-cd ~/end_effector_ros && colcon build --symlink-install --packages-ignore Gloria-M-SDK
+# 2.3 SDK 位于根目录 sdk/，不参与 colcon 对 src/ 的扫描
+cd ~/end_effector_ros && colcon build --symlink-install
 source scripts/env.sh
 ```
 
@@ -142,7 +142,7 @@ ros2 launch kwr57_ros ft_sensor.launch.py rx_topic:=/can0/rx tx_topic:=/can0/tx
 ```bash
 # 0) 先用 examples/set_id.py 给每个传感器设不同 CAN ID（各接一个、逐个改）：
 #      left : 接收 0x10 / 发送基址 0x15   right: 接收 0x11 / 发送基址 0x18
-python ~/end_effector_ros/src/KWR57-SDK/examples/set_id.py --interface canalystii --channel 0 \
+python ~/end_effector_ros/sdk/KWR57-SDK/examples/set_id.py --interface canalystii --channel 0 \
     --host-id 0x11 --sensor-id 0x18 --verify        # 配置 right（此时只接 right）
 
 # 1) 确认 single_bus.launch.py 中两台 Kwr57Device 的 ID 与硬件一致
@@ -208,12 +208,14 @@ ros2 run kwr57_ros wrench_echo --ros-args -p topic:=/ft_right/wrench_raw
 
 ```
 ~/end_effector_ros/                  ← 一个 colcon 工作区（见顶层 README）
-└── src/
+├── sdk/
     ├── CAN-SDK/                     无 ROS 的 CAN 后端与基础 I/O
-    ├── can_bridge_ros/              通用 ROS 2 CAN bridge（第2层，多通道）
     ├── KWR57-SDK/                   力传感器 SDK（协议层被设备节点复用）
-    │   └── examples/set_id.py       设置/复位设备 CAN ID（多设备前置）
-    └── kwr57_ros/                   本包（力传感器 ROS 设备节点）
+  │   └── examples/set_id.py       设置/复位设备 CAN ID（多设备前置）
+  └── Gloria-M-SDK/                夹爪 SDK submodule
+└── src/
+  ├── can_bridge_ros/              通用 ROS 2 CAN bridge（第2层，多通道）
+  └── kwr57_ros/                   本包（力传感器 ROS 设备节点）
         └── kwr57_ros/
             ├── ft_sensor_node.py    订阅 /rx 过滤、发 /tx、发 WrenchStamped
             ├── wrench_echo.py       demo 订阅（控制台）

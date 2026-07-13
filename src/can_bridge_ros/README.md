@@ -2,9 +2,9 @@
 
 通用 ROS 2 CAN 总线桥接：一个节点独占一个物理 USB-CAN 设备，将收到的帧发布为 `can_msgs/msg/Frame`，并订阅命令帧下发。支持 CANalyst-II 单设备多通道，以及按 `channel + CAN ID` 将高频帧分流到设备专属 RX 话题。
 
-本包只负责 ROS 参数、消息转换、线程调度和话题分发；无 ROS 的总线创建、CANalyst-II `libusb` 准备及权限检查统一由 [`CAN-SDK`](../CAN-SDK/README.md) 提供。
+本包只负责 ROS 参数、消息转换、线程调度和话题分发；无 ROS 的总线创建、CANalyst-II `libusb` 准备及权限检查统一由 [`CAN-SDK`](../../sdk/CAN-SDK/README.md) 提供。
 
-`CAN-SDK` 是被 `COLCON_IGNORE` 排除的纯 Python 包。运行本节点前应 source 工作区的 `scripts/env.sh`，由它通过 `PYTHONPATH` 暴露 SDK 源码；无需安装本地 SDK。
+`CAN-SDK` 是位于根目录 `sdk/` 的纯 Python 包，不在 colcon 默认扫描的 `src/` 下。运行本节点前应 source 工作区的 `scripts/env.sh`，由它通过 `PYTHONPATH` 暴露 SDK 源码；无需安装本地 SDK。
 
 ## `can_msgs` 来源
 
