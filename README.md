@@ -1,5 +1,10 @@
 # end_effector_ros
 
+> [!IMPORTANT]
+> **This repository is no longer maintained.**<br>
+> The project has been merged into the [**Unitree_G1_Workspace**](https://github.com/yizhongzhang1989/Unitree_G1_Workspace);<br>
+> All future development will take place there.
+
 末端执行器（力传感器 + 夹爪）的 ROS 2 集成工作区，采用 **"CAN 总线作为共享资源"** 的分层架构：
 一个通用 `can_bridge_ros` 独占物理 CAN 总线，各设备是独立 ROS 节点。bridge 可按 CAN ID 把高频帧分流到设备专属 RX 话题，未路由帧走默认 `/canX/rx`。**一设备一节点**，同一条总线可挂多个同构/异构设备；路由由 `robot_bringup` 在启动时根据完整设备清单生成，换接线只换启动配置。
 
@@ -54,7 +59,7 @@ source /opt/ros/foxy/setup.bash
 python3 -m pip install --user 'python-can>=4.0' canalystii 'libusb-package>=1.0.30' pyserial
 
 # 拉取含 submodule 的仓库
-git clone --recurse-submodules <本仓库URL> ~/end_effector_ros
+git clone --recurse-submodules https://github.com/madderscientist/end_effector_ros.git ~/end_effector_ros
 # 已克隆则： git submodule update --init --recursive
 
 # SDK 位于根目录 sdk/，不在 colcon 默认扫描的 src/ 下；只构建 ROS 包。
